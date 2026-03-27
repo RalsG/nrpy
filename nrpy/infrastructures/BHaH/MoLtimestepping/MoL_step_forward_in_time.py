@@ -24,6 +24,7 @@ Authors: Zachariah B. Etienne (lead maintainer)
          Samuel Tootle (GPU support in NRPy2)
          Brandon Clark (original, NRPy1 version)
 """
+
 import os
 import warnings
 from typing import Dict, List, Tuple, Union
@@ -357,8 +358,8 @@ const REAL time_start = commondata->time;
                         rhs_input = k_odd
                         rhs_output = k_even
 
-                    RK_lhs_list = []
-                    RK_rhs_list = []
+                    RK_lhs_list: List[sp.Basic] = []
+                    RK_rhs_list: List[sp.Basic] = []
                     if s != num_steps - 1:
                         if s == 0:
                             RK_lhs_list.append(y_nplus1_running_total)
@@ -472,8 +473,10 @@ _Pragma("omp parallel for") \
 
     body += """
 // Adding dt to commondata->time many times will induce roundoff error,
-// so here we set time based on the iteration number:
-commondata->time = (REAL)(commondata->nn + 1) * commondata->dt;
+// so here we set time based on the iteration number.
+// Note: t_0 and nn_0 are updated at regrid (when dt may change),
+//       so that the time formula remains correct across dt changes.
+commondata->time = commondata->t_0 + (REAL)(commondata->nn - commondata->nn_0 + 1) * commondata->dt;
 
 // Increment the timestep n:
 commondata->nn++;

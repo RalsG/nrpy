@@ -16,6 +16,8 @@ License: BSD 2-Clause
 """
 
 # Step P1: Import needed modules:
+from typing import cast
+
 import sympy as sp
 
 from nrpy.equations.grhd.Min_Max_and_Piecewise_Expressions import (
@@ -31,7 +33,11 @@ thismodule = __name__
 class SEOBNR_aligned_spin_constants:
     """Class for computing the SEOBNR aligned-spin constants."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        calibration_no_spin: bool = False,
+        calibration_spin: bool = False,
+    ) -> None:
         """
         Compute the SEOBNR aligned-spin constants.
 
@@ -43,12 +49,18 @@ class SEOBNR_aligned_spin_constants:
             - 'a_6' : the pseudo-5PN non-spinning Hamiltonian
                             calibration parameter for the SEOBNRv5 model.
                             Equation 78 of https://arxiv.org/pdf/2303.18039.
+                            This is only computed if calibration_no_spin is False.
             - 'Delta_t' : the time delay between the peak of the (l=2,m=2) mode
                             and the time when the EOB perturber crosses
                             the innermost stable circular orbit (ISCO) of the remnant.
-                            Equation 79 & 80 of https://arxiv.org/pdf/2303.18039.
+                            Always defined as Delta_t_NS + Delta_t_S.
+                            In production mode (calibration_no_spin and calibration_spin are False),
+                            it is evaluated from Equations 79 & 80 of https://arxiv.org/pdf/2303.18039.
+                            In calibration modes either Delta_t_NS or Delta_t_S is
+                            treated as an external calibration input.
             - 'd_SO' : the spin-orbit calibration parameter for the SEOBNRv5 model.
                             Equation 81 of https://arxiv.org/pdf/2303.18039.
+                            This is only computed if calibration_spin is False.
             - 'a_f' : the final spin of the remnant black hole
                             using https://arxiv.org/pdf/1605.01938 and implemented in
                             https://lscsoft.docs.ligo.org/lalsuite/lalinference/nrutils_8py_source.html#l01020
@@ -63,24 +75,152 @@ class SEOBNR_aligned_spin_constants:
                             https://ui.adsabs.harvard.edu/abs/1972ApJ...178..347B/abstract
             - 'rstop' : the radius of the remnant black hole at the time of ISCO crossing.
 
+        :param calibration_no_spin: Flag to enable/disable calibration of the non-spinning parameters
+        :param calibration_spin: Flag to enable/disable calibration of the spinning parameters
+        :raises ValueError: If both calibration_no_spin and calibration_spin are True
         :return None:
         """
-        (self.m1, self.m2, self.chi1, self.chi2) = sp.symbols(
+        # The calibration process for the SEOBNRv5 is done in two steps:
+        # 1. Calibration of the non-spinning coefficients
+        # 2. Calibration of the spin-dependent coefficients
+        # Therefore, the C code can only be generated for one of the above calibration options.
+        if calibration_no_spin and calibration_spin:
+            raise ValueError(
+                "calibration_no_spin and calibration_spin cannot both be True."
+            )
+        self.m1, self.m2, self.chi1, self.chi2 = sp.symbols(
             "m1 m2 chi1 chi2", real=True
         )
         # compute calibration parameters
-        self.compute_calibration_params()
+        if calibration_no_spin:
+            # This is the first (non-spinning) calibration stage so we have no precalculated values
+            self.a6, self.Delta_t_NS = sp.symbols("a6 Delta_t_NS", real=True)
+            # In non-spinning calibration, spin-dependent calibration terms are disabled:
+            # we set dSO and Delta_t_S to 0. The calibration workflow should supply chi1=chi2=0.
+            self.dSO = sp.sympify(0)
+            self.Delta_t_S = sp.sympify(0)
+        elif calibration_spin:
+            # This is the second (spinning) calibration stage where we have precalculated values for a6 and Delta_t_NS
+            self.compute_calibration_params()
+            # overwrite Delta_t_S and dSO to symbols
+            self.dSO, self.Delta_t_S = sp.symbols("dSO Delta_t_S", real=True)
+        else:
+            # This is the post-calibration stage and all values are precalculated
+            self.compute_calibration_params()
+        # For all stages Delta_t is defined as the sum of non-spinning and spinning parameters
+        self.Delta_t = self.Delta_t_NS + self.Delta_t_S
         # Final mass and spin computation
         self.final_spin_non_precessing_HBR2016()
         self.final_mass_non_precessing_UIB2016()
         self.rISCO = self.Kerr_ISCO_radius(self.a_f)
-        self.rstop = -1 * coord_less_bound(self.Delta_t, 0).subs(
+        self.rstop = -1 * coord_less_bound(self.Delta_t, sp.sympify(0)).subs(
             sp.Function("nrpyAbs"), sp.Abs
-        ) + f2r(0.98) * self.rISCO * coord_greater_bound(self.Delta_t, 0).subs(
+        ) + f2r(0.98) * self.rISCO * coord_greater_bound(
+            self.Delta_t, sp.sympify(0)
+        ).subs(
             sp.Function("nrpyAbs"), sp.Abs
         )
+        # strain NR fits at t_match
+        self.hNR = {}
+        modes = [(2, 2), (3, 3), (2, 1), (4, 4), (4, 3), (5, 5), (3, 2)]
+        for mode in modes:
+            l, m = mode
+            self.hNR.update({f"({l} , {m})": 0})
+        m1 = self.m1
+        m2 = self.m2
+        chi1 = self.chi1
+        chi2 = self.chi2
+        M = m1 + m2
+        nu = m1 * m2 / M**2
+        delta = (m1 - m2) / (m1 + m2)
+        chiS = (chi1 + chi2) / 2
+        chiA = (chi1 - chi2) / 2
+        chi21A = (chiS / (1 - 1.3 * nu)) * delta + chiA
+        chi33 = chiS * delta + chiA
+        chi44A = (1 - 5 * nu) * chiS + chiA * delta
+        chi = chiS + chiA * (delta / (1 - 2 * nu))
 
-    def Kerr_ISCO_radius(self, a: sp.core.mul.Mul) -> sp.core.mul.Mul:
+        self.hNR["(2 , 2)"] = sp.Abs(
+            0.430147 * chi**3 * nu
+            - 0.084939 * chi**3
+            + 0.619889 * chi**2 * nu**2
+            - 0.020826 * chi**2
+            - 13.357614 * chi * nu**3
+            + 7.194264 * chi * nu**2
+            - 1.743135 * chi * nu
+            + 0.18694 * chi
+            + 71.979698 * nu**4
+            - 46.87586 * nu**3
+            + 12.440405 * nu**2
+            - 0.868289 * nu
+            + 1.467097
+        )
+
+        self.hNR["(3 , 3)"] = sp.Abs(
+            -0.088371 * chi**2 * delta * nu
+            + 0.036258 * chi33**2 * delta
+            + 1.057731 * chi33 * nu**2
+            - 0.466709 * chi33 * nu
+            + 0.99546 * chi33
+            + 1.96267 * delta * nu**2
+            + 0.027833 * delta * nu
+            + 0.558808 * delta
+        )
+
+        self.hNR["(2 , 1)"] = sp.Abs(
+            -0.033175 * chi21A**3 * delta
+            + 0.086356 * chi21A**2 * delta * nu
+            - 0.049897 * chi21A**2 * delta
+            + 0.012706 * chi21A * delta
+            + 0.168668 * chi21A * nu
+            - 0.285597 * chi21A
+            + 1.067921 * delta * nu**2
+            - 0.189346 * delta * nu
+            + 0.431426 * delta
+        )
+
+        self.hNR["(4 , 4)"] = sp.Abs(
+            0.031483 * chi44A**2
+            - 0.180165 * chi44A * nu
+            + 0.063931 * chi44A
+            + 6.239418 * nu**3
+            - 1.947473 * nu**2
+            - 0.615307 * nu
+            + 0.262533
+        )
+
+        self.hNR["(4 , 3)"] = sp.Abs(
+            -0.071554 * chi33**2 * delta * nu
+            + 0.021932 * chi33**2 * delta
+            - 1.738079 * chi33 * nu**2
+            + 0.436576 * chi33 * nu
+            - 0.020081 * chi33
+            + 0.809615 * delta * nu**2
+            - 0.273364 * delta * nu
+            + 0.07442 * delta
+        )
+
+        self.hNR["(3 , 2)"] = sp.Abs(
+            0.02259 * chi**2
+            + 0.307803 * chi * nu
+            - 0.020771 * chi
+            + 8.917771 * nu**3
+            - 2.194506 * nu**2
+            - 0.387911 * nu
+            + 0.155446
+        )
+
+        self.hNR["(5 , 5)"] = sp.Abs(
+            -7.402839 * chi33 * nu**3
+            + 3.965852 * chi33 * nu**2
+            - 0.762776 * chi33 * nu
+            + 0.062757 * chi33
+            + 1.093812 * delta * nu**2
+            - 0.462142 * delta * nu
+            + 0.125468 * delta
+        )
+
+    def Kerr_ISCO_radius(self, a: sp.Expr) -> sp.Expr:
         """
         Compute the radius of the innermost stable circular orbit (ISCO) of a Kerr black hole.
 
@@ -95,7 +235,7 @@ class SEOBNR_aligned_spin_constants:
         )
         z2 = sp.sqrt(3 * a_ceil_one**2 + z1**2)
         a_sign = sp.sign(a_ceil_one)
-        return 3 + z2 - sp.sqrt((3 - z1) * (3 + z1 + 2 * z2)) * a_sign
+        return cast(sp.Expr, 3 + z2 - sp.sqrt((3 - z1) * (3 + z1 + 2 * z2)) * a_sign)
 
     def compute_calibration_params(
         self,
@@ -149,7 +289,7 @@ class SEOBNR_aligned_spin_constants:
             - f2r(177.334831768076) * nu
             - f2r(37.6897780220529)
         )
-        Delta_t_S = nu ** (sp.Rational(-1, 5) + 0 * nu) * (
+        self.Delta_t_S = nu ** (sp.Rational(-1, 5) + 0 * nu) * (
             f2r(8.39238879807543) * am**2 * ap
             - f2r(16.9056858928167) * am**2 * nu
             + f2r(7.23410583477034) * am**2
@@ -174,10 +314,9 @@ class SEOBNR_aligned_spin_constants:
             -f2r(9.79317619e03),
             f2r(5.55652392e04),
         ]
-        Delta_t_NS = nu ** (sp.Rational(-1, 5) + par_dtns[0] * nu) * (
+        self.Delta_t_NS = nu ** (sp.Rational(-1, 5) + par_dtns[0] * nu) * (
             par_dtns[1] + par_dtns[2] * nu + par_dtns[3] * nu**2 + par_dtns[4] * nu**3
         )
-        self.Delta_t = Delta_t_NS + Delta_t_S
 
     def final_spin_non_precessing_HBR2016(
         self,
