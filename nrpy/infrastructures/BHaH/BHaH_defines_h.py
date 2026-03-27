@@ -1,3 +1,4 @@
+# nrpy/infrastructures/BHaH/BHaH_defines_h.py
 """
 Construct BHaH_defines.h from data registered to griddata_commondata, CodeParameters, and NRPyParameters.
 
@@ -28,7 +29,7 @@ core_modules_list = [
     "reference_metric",
     "nrpy.infrastructures.BHaH.CurviBoundaryConditions.BHaH_defines",
     "nrpy.infrastructures.BHaH.MoLtimestepping.BHaH_defines",
-    "nrpydev.infrastructures.BHaH.interpolation.interpolation",
+    "nrpydev.infrastructures.BHaH.interpolation.register_all",
     "grid",
 ]
 
