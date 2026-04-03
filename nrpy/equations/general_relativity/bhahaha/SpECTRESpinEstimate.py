@@ -136,7 +136,7 @@ class SpECTRESpinEstimateClass:
             raise ValueError("orientation_sign must be +1 or -1.")
 
         self.CoordSystem = CoordSystem
-        self._orientation_sign = _sympify_int(orientation_sign)
+        self._orientation_sign = sp.Integer(orientation_sign)
 
         self._rfm = refmetric.reference_metric[
             (
@@ -310,7 +310,7 @@ class SpECTRESpinEstimateClass:
         """
         if int(sign) not in (+1, -1):
             raise ValueError("orientation_sign must be +1 or -1.")
-        self._orientation_sign = _sympify_int(sign)
+        self._orientation_sign = sp.Integer(sign)
 
         # Update epsilon^{AB}
         self._eps2UU[0][1] = self._orientation_sign / self._sqrtq
