@@ -1,5 +1,9 @@
-""" Register a C function to perform numerical integrations over the apparent horizon surface for spin and mass diagnostics. """
+"""
+Register a C function to perform numerical integrations over the apparent horizon surface for spin and mass diagnostics.
+Needs: Integrands built in equations/general_relativity/bhahaha/SpECTRESpinEstimate.py
 
+Author: Ralston Graves
+"""
 from typing import Union
 
 import nrpy.c_codegen as ccg
