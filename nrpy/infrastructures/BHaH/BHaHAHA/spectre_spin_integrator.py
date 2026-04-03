@@ -22,8 +22,10 @@ def register_CFunction_diagnostics_spectre_spin(
     enable_rfm_precompute: bool = False,
     enable_fd_functions: bool = False,
 ) -> Union[None, pcg.NRPyEnv_type]:
-    """ Register a C function that integrates SpECTRE-style spin integrands over the apparent-horizon 2-surface and stores RunSums in the diagnostics struct. """
-
+    """
+    Register a C function that integrates SpECTRE-style spin integrands over the apparent-horizon 2-surface and stores RunSums in the diagnostics struct.
+    Integrands are built in nrpy/equations/general_relativity/bhahaha/SPeCTRESpinEstimate.py
+    """
     if pcg.pcg_registration_phase():
         pcg.register_func_call(f"{__name__}.{register_CFunction_diagnostics_spectre_spin.__name__}", locals())
         return None
