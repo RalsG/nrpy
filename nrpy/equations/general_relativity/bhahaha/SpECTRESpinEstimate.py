@@ -91,16 +91,6 @@ import nrpy.indexedexp as ixp
 import nrpy.reference_metric as refmetric
 
 
-def _sympify_int(x: int) -> sp.Integer:
-    """
-    Safely convert an integer-like input to a SymPy Integer.
-
-    :param x: Integer-like input value.
-    :return: SymPy Integer representation of the input.
-    """
-    return cast(sp.Integer, sp.Integer(int(sp.Integer(x))))
-
-
 class SpECTRESpinEstimateClass:
     """
     Construct Omega-based quasilocal spin diagnostics on a deformed sphere.
@@ -146,7 +136,7 @@ class SpECTRESpinEstimateClass:
             raise ValueError("orientation_sign must be +1 or -1.")
 
         self.CoordSystem = CoordSystem
-        self._orientation_sign = _sympify_int(orientation_sign)
+        self._orientation_sign = sp.Integer(orientation_sign)
 
         self._rfm = refmetric.reference_metric[
             (
@@ -172,21 +162,21 @@ class SpECTRESpinEstimateClass:
         # e_theta^i = (partial_theta h, 1, 0)
         # e_phi^i   = (partial_phi h, 0, 1)
         self._eADU: List[List[sp.Expr]] = [
-            [sp.sympify(0) for _ in range(3)] for __ in range(2)
+            [sp.Integer(0) for _ in range(3)] for __ in range(2)
         ]
         self._eADU[0][0] = self._h_dD[0]
-        self._eADU[0][1] = sp.sympify(1)
-        self._eADU[0][2] = sp.sympify(0)
+        self._eADU[0][1] = sp.Integer(1)
+        self._eADU[0][2] = sp.Integer(0)
         self._eADU[1][0] = self._h_dD[1]
-        self._eADU[1][1] = sp.sympify(0)
-        self._eADU[1][2] = sp.sympify(1)
+        self._eADU[1][1] = sp.Integer(0)
+        self._eADU[1][2] = sp.Integer(1)
 
         # Induced 2-metric q_AB = gamma_ij e_A^i e_B^j
         self._SE_qDD = ixp.declarerank2("SE_qDD", symmetry="sym01", dimension=2)
         self._SE_qDD_expr = ixp.zerorank2(dimension=2)
         for A in range(2):
             for B in range(2):
-                val = sp.sympify(0)
+                val = sp.Integer(0)
                 for i in range(3):
                     for j in range(3):
                         val += self._eADU[A][i] * self._eADU[B][j] * self._gammaDD[i][j]
@@ -209,9 +199,9 @@ class SpECTRESpinEstimateClass:
 
         # X_B = e_B^i K_ij s^j
         self._SE_XB = ixp.declarerank1("SE_XB", dimension=2)
-        self._SE_XB_expr = [sp.sympify(0), sp.sympify(0)]
+        self._SE_XB_expr = [sp.Integer(0), sp.Integer(0)]
         for B in range(2):
-            val = sp.sympify(0)
+            val = sp.Integer(0)
             for i in range(3):
                 for j in range(3):
                     val += self._eADU[B][i] * self._KDD[i][j] * self._sU[j]
@@ -234,9 +224,9 @@ class SpECTRESpinEstimateClass:
         )
 
         # Placeholders; will be defined in _build_intrinsic_ops_and_omega.
-        self._R: sp.Expr = sp.sympify(0)
-        self._Omega_base: sp.Expr = sp.sympify(0)
-        self._Omega: sp.Expr = sp.sympify(0)
+        self._R: sp.Expr = sp.Integer(0)
+        self._Omega_base: sp.Expr = sp.Integer(0)
+        self._Omega: sp.Expr = sp.Integer(0)
 
         # Build intrinsic connection, R, Omega, and Laplacians
         self._build_intrinsic_ops_and_omega()
@@ -259,9 +249,9 @@ class SpECTRESpinEstimateClass:
 
         # Flux for div(R grad z): F^A = sqrt(q) * R * q^{AB} * z_,B
         self._SE_flux_densityU = ixp.declarerank1("SE_flux_densityU", dimension=2)
-        self._SE_flux_densityU_expr = [sp.sympify(0), sp.sympify(0)]
+        self._SE_flux_densityU_expr = [sp.Integer(0), sp.Integer(0)]
         for A in range(2):
-            tmp = sp.sympify(0)
+            tmp = sp.Integer(0)
             for B in range(2):
                 tmp += self._sqrtq * self._R * self._SE_qUU[A][B] * self._SE_zeta_dD[B]
             self._SE_flux_densityU_expr[A] = tmp
@@ -269,7 +259,7 @@ class SpECTRESpinEstimateClass:
         # Derivatives of flux; used for div(R grad z)
         self._SE_flux_densityU_dD = ixp.declarerank2("SE_flux_densityU_dD", dimension=2)
 
-        flux_div = sp.sympify(0)
+        flux_div = sp.Integer(0)
         for A in range(2):
             flux_div += self._SE_flux_densityU_dD[A][A]
         # div_R_grad_z = (1/sqrt(q)) * partial_A ( sqrt(q) R q^{AB} z_,B )
@@ -299,7 +289,7 @@ class SpECTRESpinEstimateClass:
             raise ValueError("xMeasU must have length 3.")
         rr = self._rfm.xx[0]
         for expr in xMeasU:
-            if rr in sp.sympify(expr).free_symbols:
+            if rr in sp.Integer(expr).free_symbols:
                 raise ValueError(
                     "MeasurementFrame coordinate depends explicitly on xx[0]. "
                     "Provide on-surface expressions using (theta, phi, h) only."
@@ -320,14 +310,14 @@ class SpECTRESpinEstimateClass:
         """
         if int(sign) not in (+1, -1):
             raise ValueError("orientation_sign must be +1 or -1.")
-        self._orientation_sign = _sympify_int(sign)
+        self._orientation_sign = sp.Integer(sign)
 
         # Update epsilon^{AB}
         self._eps2UU[0][1] = self._orientation_sign / self._sqrtq
         self._eps2UU[1][0] = -self._orientation_sign / self._sqrtq
 
         # Recompute Omega = eps^{AB} * nabla_A X_B using updated eps^{AB}
-        omega_sum = sp.sympify(0)
+        omega_sum = sp.Integer(0)
         for A in range(2):
             for B in range(2):
                 covXB = self._SE_XB_dD[B][A]
@@ -546,7 +536,7 @@ class SpECTRESpinEstimateClass:
         """
         if len(zOmega_integrals) != 3:
             raise ValueError("zOmega_integrals must have three entries.")
-        ssum = sp.sympify(0)
+        ssum = sp.Integer(0)
         for a in range(3):
             ssum += zOmega_integrals[a] ** 2
         return cast(sp.Expr, sp.sqrt(ssum) / (8 * sp.pi))
@@ -593,7 +583,7 @@ class SpECTRESpinEstimateClass:
         nU = cast(List[sp.Expr], red["nU"])
         SU_nominal = [S * nU[i] for i in range(3)]
 
-        SU_fallback_zero: List[sp.Expr] = [sp.sympify(0), sp.sympify(0), sp.sympify(0)]
+        SU_fallback_zero: List[sp.Expr] = [sp.Integer(0), sp.Integer(0), sp.Integer(0)]
 
         out: Dict[str, Any] = {
             "SU_nominal": SU_nominal,
@@ -643,7 +633,7 @@ class SpECTRESpinEstimateClass:
         for A in range(2):
             for B in range(2):
                 for C in range(2):
-                    tmp = sp.sympify(0)
+                    tmp = sp.Integer(0)
                     for E in range(2):
                         for F in range(2):
                             tmp += (
@@ -658,7 +648,7 @@ class SpECTRESpinEstimateClass:
         for C in range(2):
             for A in range(2):
                 for B in range(2):
-                    val = sp.sympify(0)
+                    val = sp.Integer(0)
                     for D in range(2):
                         val += (
                             sp.Rational(1, 2)
@@ -677,7 +667,7 @@ class SpECTRESpinEstimateClass:
             for C in range(2):
                 for A in range(2):
                     for B in range(2):
-                        term = sp.sympify(0)
+                        term = sp.Integer(0)
                         for D in range(2):
                             bracket = (
                                 self._SE_qDD_dD[B][D][A]
@@ -713,8 +703,8 @@ class SpECTRESpinEstimateClass:
         GammaCAD_GammaDBC = ixp.zerorank2(dimension=2)
         for A in range(2):
             for B in range(2):
-                g1 = sp.sympify(0)
-                g2 = sp.sympify(0)
+                g1 = sp.Integer(0)
+                g2 = sp.Integer(0)
                 for C in range(2):
                     for D in range(2):
                         g1 += self._GammaU2DD[C][A][B] * self._GammaU2DD[D][C][D]
@@ -723,7 +713,7 @@ class SpECTRESpinEstimateClass:
                 GammaCAD_GammaDBC[A][B] = g2
 
         # Ricci scalar R
-        self._R = sp.sympify(0)
+        self._R = sp.Integer(0)
         for A in range(2):
             for B in range(2):
                 self._R += self._SE_qUU[A][B] * (
@@ -734,7 +724,7 @@ class SpECTRESpinEstimateClass:
                 )
 
         # Spin function Omega = eps^{AB} * nabla_A X_B
-        omega_sum = sp.sympify(0)
+        omega_sum = sp.Integer(0)
         for A in range(2):
             for B in range(2):
                 covXB = self._SE_XB_dD[B][A]
@@ -746,8 +736,8 @@ class SpECTRESpinEstimateClass:
 
         # Laplacians of zeta and y_aux:
         # Delta f = q^{AB} * ( partial_A partial_B f - Gamma^C_{AB} partial_C f )
-        self._laplacian_of_z = sp.sympify(0)
-        self._laplacian_of_y = sp.sympify(0)
+        self._laplacian_of_z = sp.Integer(0)
+        self._laplacian_of_y = sp.Integer(0)
         for A in range(2):
             for B in range(2):
                 term_z = self._SE_zeta_dDD[A][B]
