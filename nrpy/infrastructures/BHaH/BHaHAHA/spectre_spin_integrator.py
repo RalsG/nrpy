@@ -22,22 +22,18 @@ def register_CFunction_diagnostics_spectre_spin(
     enable_rfm_precompute: bool = False,
     enable_fd_functions: bool = False,
 ) -> Union[None, pcg.NRPyEnv_type]:
-    """
-    Register a C function that integrates SpECTRE-style spin integrands over the apparent-horizon 2-surface and stores RunSums in the diagnostics struct.
-    Integrands are built in nrpy/equations/general_relativity/bhahaha/SPeCTRESpinEstimate.py
-    """
+    """ Register a C function that computes the SpECTRE-style spin vector and stores it in the diagnostics struct. """
+
     if pcg.pcg_registration_phase():
         pcg.register_func_call(f"{__name__}.{register_CFunction_diagnostics_spectre_spin.__name__}", locals())
         return None
 
     includes = ["BHaH_defines.h", "BHaH_function_prototypes.h"]
     desc = r"""
-    Perform all surface integrations for the SpECTRE-style spin diagnostic.
-    This function computes the raw RunSums and stores them. A separate
-    function should be called to reduce these sums to a final spin vector.
+    Compute the SpECTRE-style spin vector diagnostic and store it in the diagnostics struct.
     """
-    cfunc_type = "void"
-    name = "BHaHAHA_SpECTRE_diagnostics_integration"
+    cfunc_type = "int"
+    name = "diagnostics_spectre_spin"
     params = "commondata_struct *restrict commondata, griddata_struct *restrict griddata"
 
     # Step 1: Get an instance of the symbolic calculator.
@@ -186,23 +182,28 @@ def register_CFunction_diagnostics_spectre_spin(
     } // END OMP CRITICAL
 } // END OMP PARALLEL
 
-// Step 6: Finalize sums by multiplying by coordinate steps and store results.
+// Step 6: Compute the spin vector from the integrated quantities.
 bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
 const REAL dxx1 = params->dxx1;
 const REAL dxx2 = params->dxx2;
 
-bhahaha_diags->RunSums.A = A_sum * dxx1 * dxx2;
-for(int i=0; i<3; ++i) {
-    bhahaha_diags->RunSums.XU[i]  = XU_sum[i]  * dxx1 * dxx2;
-    bhahaha_diags->RunSums.XRU[i] = XRU_sum[i] * dxx1 * dxx2;
-    bhahaha_diags->RunSums.XOU[i] = XOU_sum[i] * dxx1 * dxx2;
-    bhahaha_diags->RunSums.ZOU[i] = ZOU_sum[i] * dxx1 * dxx2;
-}
-bhahaha_diags->RunSums.R0   = R0_sum   * dxx1 * dxx2;
-bhahaha_diags->RunSums.O0   = O0_sum   * dxx1 * dxx2;
-bhahaha_diags->RunSums.Oabs = Oabs_sum * dxx1 * dxx2;
+const REAL A = A_sum * dxx1 * dxx2;
+const REAL R0 = R0_sum * dxx1 * dxx2;
+const REAL XRU[3] = {XRU_sum[0] * dxx1 * dxx2, XRU_sum[1] * dxx1 * dxx2, XRU_sum[2] * dxx1 * dxx2};
+const REAL XOU[3] = {XOU_sum[0] * dxx1 * dxx2, XOU_sum[1] * dxx1 * dxx2, XOU_sum[2] * dxx1 * dxx2};
+const REAL ZOU[3] = {ZOU_sum[0] * dxx1 * dxx2, ZOU_sum[1] * dxx1 * dxx2, ZOU_sum[2] * dxx1 * dxx2};
 
-return; // Success
+const REAL spin_U[3] = {
+    (XOU[0] - ZOU[0] * (XRU[0] / R0)) / A,
+    (XOU[1] - ZOU[1] * (XRU[1] / R0)) / A,
+    (XOU[2] - ZOU[2] * (XRU[2] / R0)) / A
+};
+
+bhahaha_diags->spin_chi_x_spectre = spin_U[0];
+bhahaha_diags->spin_chi_y_spectre = spin_U[1];
+bhahaha_diags->spin_chi_z_spectre = spin_U[2];
+
+return BHAHAHA_SUCCESS;
 """
     # Format and register the C function using the standard helper.
     cfc.register_CFunction(
