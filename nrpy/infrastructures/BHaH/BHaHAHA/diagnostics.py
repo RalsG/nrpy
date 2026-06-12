@@ -158,7 +158,9 @@ calculations, norm evaluations, and detailed final iteration analyses.
       if (commondata->error_flag != BHAHAHA_SUCCESS)
         return;
 
-      bah_diagnostics_spectre_spin(commondata, griddata);
+      commondata->error_flag = bah_diagnostics_spectre_spin(commondata, griddata);
+      if (commondata->error_flag != BHAHAHA_SUCCESS)
+        return;
 
       // Display detailed final iteration diagnostics if verbosity is enabled.
       {
