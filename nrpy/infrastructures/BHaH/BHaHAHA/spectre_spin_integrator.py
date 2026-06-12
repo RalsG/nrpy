@@ -5,7 +5,7 @@ Needs: Integrands built in equations/general_relativity/bhahaha/SpECTRESpinEstim
 Author: Ralston Graves
 """
 
-from typing import List, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import nrpy.c_codegen as ccg
 import nrpy.c_function as cfc
@@ -19,6 +19,60 @@ from nrpy.helpers.generic import clang_format
 from nrpy.infrastructures.BHaH.CurviBoundaryConditions.apply_bcs_inner_only import (
     APPLY_PARITY_BRANCHLESS_PREFUNC,
 )
+
+
+_SPECTRE_SPIN_SCRATCH_GFS = (
+    "SE_qDD00",
+    "SE_qDD01",
+    "SE_qDD11",
+    "SE_XD0",
+    "SE_XD1",
+    "zU0",
+    "zU1",
+    "zU2",
+)
+
+
+def _register_private_spectre_spin_gridfunctions() -> Dict[str, Optional[gri.GridFunctionType]]:
+    """Temporarily register spin-only scratch gridfunctions for FD codegen."""
+    saved_gfs = {
+        gf_name: gri.glb_gridfcs_dict.get(gf_name)
+        for gf_name in _SPECTRE_SPIN_SCRATCH_GFS
+    }
+    for gf_name in _SPECTRE_SPIN_SCRATCH_GFS:
+        gri.glb_gridfcs_dict.pop(gf_name, None)
+
+    _ = gri.register_gridfunctions_for_single_rank2(
+        "SE_qDD",
+        symmetry="sym01",
+        dimension=2,
+        group="AUX",
+        gf_array_name="spectre_spin_gfs",
+    )
+    _ = gri.register_gridfunctions_for_single_rank1(
+        "SE_XD",
+        dimension=2,
+        group="AUX",
+        gf_array_name="spectre_spin_gfs",
+    )
+    _ = gri.register_gridfunctions_for_single_rank1(
+        "zU",
+        dimension=3,
+        group="AUX",
+        gf_array_name="spectre_spin_gfs",
+    )
+    return saved_gfs
+
+
+def _restore_private_spectre_spin_gridfunctions(
+    saved_gfs: Dict[str, Optional[gri.GridFunctionType]],
+) -> None:
+    """Remove temporary spin scratch gridfunctions from the global registry."""
+    for gf_name in _SPECTRE_SPIN_SCRATCH_GFS:
+        if saved_gfs[gf_name] is None:
+            gri.glb_gridfcs_dict.pop(gf_name, None)
+        else:
+            gri.glb_gridfcs_dict[gf_name] = saved_gfs[gf_name]
 
 
 def _central_fd_coefficients(fd_order: int) -> Tuple[List[float], List[float]]:
@@ -430,20 +484,20 @@ static int spectre_spin_build_scalar_derivative_row(spectre_spin_sparse_row *res
   return BHAHAHA_SUCCESS;
 }
 
-static REAL spectre_spin_metric_deriv(const REAL *restrict auxevol_gfs, const int gf, const int i0, const int i1, const int i2,
+static REAL spectre_spin_metric_deriv(const REAL *restrict gfs, const int gf, const int i0, const int i1, const int i2,
                                       const int dir, const int Nxx_plus_2NGHOSTS0, const int Nxx_plus_2NGHOSTS1,
                                       const int Nxx_plus_2NGHOSTS2, const REAL invdtheta, const REAL invdphi) {
   REAL deriv = 0.0;
   if (dir == 0) {
     for (int s = -SPECTRE_SPIN_FD_RADIUS; s <= SPECTRE_SPIN_FD_RADIUS; s++) {
       const int idx = i0 + Nxx_plus_2NGHOSTS0 * ((i1 + s) + Nxx_plus_2NGHOSTS1 * (i2 + Nxx_plus_2NGHOSTS2 * gf));
-      deriv += spectre_spin_fd_first[s + SPECTRE_SPIN_FD_RADIUS] * auxevol_gfs[idx];
+      deriv += spectre_spin_fd_first[s + SPECTRE_SPIN_FD_RADIUS] * gfs[idx];
     }
     deriv *= invdtheta;
   } else {
     for (int s = -SPECTRE_SPIN_FD_RADIUS; s <= SPECTRE_SPIN_FD_RADIUS; s++) {
       const int idx = i0 + Nxx_plus_2NGHOSTS0 * (i1 + Nxx_plus_2NGHOSTS1 * ((i2 + s) + Nxx_plus_2NGHOSTS2 * gf));
-      deriv += spectre_spin_fd_first[s + SPECTRE_SPIN_FD_RADIUS] * auxevol_gfs[idx];
+      deriv += spectre_spin_fd_first[s + SPECTRE_SPIN_FD_RADIUS] * gfs[idx];
     }
     deriv *= invdphi;
   }
@@ -613,7 +667,7 @@ static int spectre_spin_procrustes(const REAL C[3][3], REAL O[3][3]) {
  * normalized to the 2*pi-orbit convention int |grad z_alpha|^2 dA=A^2/(6*pi).
  */
 static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commondata, griddata_struct *restrict griddata,
-                                               REAL *restrict auxevol_gfs) {
+                                               const REAL *restrict auxevol_gfs, REAL *restrict spectre_spin_gfs) {
   const int grid = 0;
   const params_struct *restrict params = &griddata[grid].params;
   const REAL *restrict in_gfs = griddata[grid].gridfuncs.y_n_gfs;
@@ -634,9 +688,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   for (int i2 = NGHOSTS; i2 < NGHOSTS + Nxx2; i2++) {
     for (int i1 = NGHOSTS; i1 < NGHOSTS + Nxx1; i1++) {
       for (int i0 = NGHOSTS; i0 < NGHOSTS + Nxx0; i0++) {
-        auxevol_gfs[IDX4(ZU0GF, i0, i1, i2)] = z_init;
-        auxevol_gfs[IDX4(ZU1GF, i0, i1, i2)] = z_init;
-        auxevol_gfs[IDX4(ZU2GF, i0, i1, i2)] = z_init;
+        spectre_spin_gfs[IDX4(ZU0GF, i0, i1, i2)] = z_init;
+        spectre_spin_gfs[IDX4(ZU1GF, i0, i1, i2)] = z_init;
+        spectre_spin_gfs[IDX4(ZU2GF, i0, i1, i2)] = z_init;
       }
     }
   }
@@ -716,9 +770,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
 
 @RICCI_CODE@
 
-      const REAL q00 = auxevol_gfs[IDX4(SE_QDD00GF, i0, i1, i2)];
-      const REAL q01 = auxevol_gfs[IDX4(SE_QDD01GF, i0, i1, i2)];
-      const REAL q11 = auxevol_gfs[IDX4(SE_QDD11GF, i0, i1, i2)];
+      const REAL q00 = spectre_spin_gfs[IDX4(SE_QDD00GF, i0, i1, i2)];
+      const REAL q01 = spectre_spin_gfs[IDX4(SE_QDD01GF, i0, i1, i2)];
+      const REAL q11 = spectre_spin_gfs[IDX4(SE_QDD11GF, i0, i1, i2)];
       const REAL detq = q00 * q11 - q01 * q01;
       if (!(detq > 0.0) || !isfinite(detq) || !(spin_area_density > 0.0) || !isfinite(spin_area_density) ||
           !isfinite(spin_ricci_scalar)) {
@@ -847,17 +901,17 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       if (status != BHAHAHA_SUCCESS)
         break;
 
-      const REAL dq00_dtheta = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD00GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
+      const REAL dq00_dtheta = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD00GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
                                                          Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
-      const REAL dq01_dtheta = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD01GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
+      const REAL dq01_dtheta = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD01GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
                                                          Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
-      const REAL dq11_dtheta = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD11GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
+      const REAL dq11_dtheta = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD11GF, i0, i1, i2, 0, Nxx_plus_2NGHOSTS0,
                                                          Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
-      const REAL dq00_dphi = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD00GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
+      const REAL dq00_dphi = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD00GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
                                                        Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
-      const REAL dq01_dphi = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD01GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
+      const REAL dq01_dphi = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD01GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
                                                        Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
-      const REAL dq11_dphi = spectre_spin_metric_deriv(auxevol_gfs, SE_QDD11GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
+      const REAL dq11_dphi = spectre_spin_metric_deriv(spectre_spin_gfs, SE_QDD11GF, i0, i1, i2, 1, Nxx_plus_2NGHOSTS0,
                                                        Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, invdtheta, invdphi);
 
       const REAL d_q[2][2][2] = {
@@ -1127,9 +1181,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
         const int ii1 = NGHOSTS + j1;
         const int ii2 = NGHOSTS + j2;
         for (int ii0 = NGHOSTS; ii0 < NGHOSTS + Nxx0; ii0++) {
-          auxevol_gfs[IDX4(ZU0GF, ii0, ii1, ii2)] = modes[0 * N + p];
-          auxevol_gfs[IDX4(ZU1GF, ii0, ii1, ii2)] = modes[1 * N + p];
-          auxevol_gfs[IDX4(ZU2GF, ii0, ii1, ii2)] = modes[2 * N + p];
+          spectre_spin_gfs[IDX4(ZU0GF, ii0, ii1, ii2)] = modes[0 * N + p];
+          spectre_spin_gfs[IDX4(ZU1GF, ii0, ii1, ii2)] = modes[1 * N + p];
+          spectre_spin_gfs[IDX4(ZU2GF, ii0, ii1, ii2)] = modes[2 * N + p];
         }
       }
     }
@@ -1139,9 +1193,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     for (int i2 = NGHOSTS; i2 < NGHOSTS + Nxx2; i2++) {
       for (int i1 = NGHOSTS; i1 < NGHOSTS + Nxx1; i1++) {
         for (int ii0 = NGHOSTS; ii0 < NGHOSTS + Nxx0; ii0++) {
-          finite_error |= !isfinite(auxevol_gfs[IDX4(ZU0GF, ii0, i1, i2)]);
-          finite_error |= !isfinite(auxevol_gfs[IDX4(ZU1GF, ii0, i1, i2)]);
-          finite_error |= !isfinite(auxevol_gfs[IDX4(ZU2GF, ii0, i1, i2)]);
+          finite_error |= !isfinite(spectre_spin_gfs[IDX4(ZU0GF, ii0, i1, i2)]);
+          finite_error |= !isfinite(spectre_spin_gfs[IDX4(ZU1GF, ii0, i1, i2)]);
+          finite_error |= !isfinite(spectre_spin_gfs[IDX4(ZU2GF, ii0, i1, i2)]);
         }
       }
     }
@@ -1217,32 +1271,14 @@ def register_CFunction_diagnostics_spectre_spin(
         CoordSystem + ("_rfm_precompute" if enable_rfm_precompute else "")
     ]
 
-    # Step 2: Register the memory-backed gridfunctions needed by the diagnostic.
-    _ = gri.register_gridfunctions_for_single_rank2(
-        "SE_qDD",
-        symmetry="sym01",
-        dimension=2,
-        group="AUXEVOL",
-        gf_array_name="auxevol_gfs",
-    )
-    _ = gri.register_gridfunctions_for_single_rank1(
-        "SE_XD",
-        dimension=2,
-        group="AUXEVOL",
-        gf_array_name="auxevol_gfs",
-    )
-    _ = gri.register_gridfunctions_for_single_rank1(
-        "zU",
-        dimension=3,
-        group="AUXEVOL",
-        gf_array_name="auxevol_gfs",
-    )
+    # Step 2: Temporarily register spin scratch symbols for FD codegen only.
+    saved_spectre_spin_gfs = _register_private_spectre_spin_gridfunctions()
 
     gf_assignments = spin_calc.get_gridfunction_assignments(include_flux_density=False)
     gf_names = [str(sym) for sym in gf_assignments.keys()]
 
     lhss_precompute = [
-        gri.BHaHGridFunction.access_gf(gf_name, gf_array_name="auxevol_gfs")
+        gri.BHaHGridFunction.access_gf(gf_name, gf_array_name="spectre_spin_gfs")
         for gf_name in gf_names
     ]
     rhss_precompute = list(gf_assignments.values())
@@ -1279,6 +1315,10 @@ def register_CFunction_diagnostics_spectre_spin(
         parity_entries.append(f"  [{gf_macro}] = {parity_value},")
     parity_table_entries = "\n".join(parity_entries)
     selected_precompute_gfs = ", ".join(gf_macros)
+    scratch_gf_defines = "\n".join(
+        f"#define {gf_name.upper()}GF {idx}"
+        for idx, gf_name in enumerate(_SPECTRE_SPIN_SCRATCH_GFS)
+    )
 
     # Step 3: Generate C code for intermediate surface fields.
     precompute_c_code = ccg.c_codegen(
@@ -1353,31 +1393,34 @@ def register_CFunction_diagnostics_spectre_spin(
     prefunc = (
         APPLY_PARITY_BRANCHLESS_PREFUNC
         + rf"""
-static const int8_t spectre_spin_auxevol_gf_parity[NUM_AUXEVOL_GFS] = {{
+#define NUM_SPECTRE_SPIN_SCRATCH_GFS {len(_SPECTRE_SPIN_SCRATCH_GFS)}
+{scratch_gf_defines}
+
+static const int8_t spectre_spin_scratch_gf_parity[NUM_SPECTRE_SPIN_SCRATCH_GFS] = {{
 {parity_table_entries}
 }};
 
 /**
- * Apply inner boundary conditions to selected AUXEVOL gridfunctions.
+ * Apply inner boundary conditions to selected spin scratch gridfunctions.
  *
  * The spin diagnostic precomputes SE_qDD and SE_XD on physical angular points
  * before generated finite-difference code differentiates those fields. This
  * helper fills their angular ghost zones for every active radial horizon slab.
  *
  * @param[in] bcstruct Boundary metadata for inner curvilinear points.
- * @param[in,out] auxevol_gfs AUXEVOL gridfunction storage.
+ * @param[in,out] spectre_spin_gfs Spin diagnostic scratch storage.
  * @param Nxx0 Number of active radial horizon slabs.
  * @param Nxx_plus_2NGHOSTS0 Radial grid size including ghost zones.
  * @param Nxx_plus_2NGHOSTS1 Theta grid size including ghost zones.
  * @param Nxx_plus_2NGHOSTS2 Phi grid size including ghost zones.
- * @param[in] which_gfs Selected AUXEVOL gridfunction indices.
+ * @param[in] which_gfs Selected spin scratch gridfunction indices.
  * @param num_gfs Number of selected gridfunctions.
- * @param[in] auxevol_gf_parity Parity table indexed by AUXEVOL gridfunction.
+ * @param[in] scratch_gf_parity Parity table indexed by spin scratch gridfunction.
  */
-static void apply_inner_bc_for_selected_auxevol_gfs(const bc_struct *restrict bcstruct, REAL *restrict auxevol_gfs, const int Nxx0,
-                                                    const int Nxx_plus_2NGHOSTS0, const int Nxx_plus_2NGHOSTS1,
-                                                    const int Nxx_plus_2NGHOSTS2, const int *restrict which_gfs, const int num_gfs,
-                                                    const int8_t *restrict auxevol_gf_parity) {{
+static void apply_inner_bc_for_selected_spectre_spin_gfs(const bc_struct *restrict bcstruct, REAL *restrict spectre_spin_gfs, const int Nxx0,
+                                                         const int Nxx_plus_2NGHOSTS0, const int Nxx_plus_2NGHOSTS1,
+                                                         const int Nxx_plus_2NGHOSTS2, const int *restrict which_gfs, const int num_gfs,
+                                                         const int8_t *restrict scratch_gf_parity) {{
   const bc_info_struct *bc_info = &bcstruct->bc_info;
 
 #pragma omp parallel for collapse(2)
@@ -1391,11 +1434,11 @@ static void apply_inner_bc_for_selected_auxevol_gfs(const bc_struct *restrict bc
       if (dst_i0 < NGHOSTS || dst_i0 >= NGHOSTS + Nxx0)
         continue;
 
-      const int8_t p = bc->parity[auxevol_gf_parity[which_gf]];
-      auxevol_gfs[IDX4pt(which_gf, dstpt)] = apply_parity_branchless(auxevol_gfs[IDX4pt(which_gf, bc->srcpt)], p);
+      const int8_t p = bc->parity[scratch_gf_parity[which_gf]];
+      spectre_spin_gfs[IDX4pt(which_gf, dstpt)] = apply_parity_branchless(spectre_spin_gfs[IDX4pt(which_gf, bc->srcpt)], p);
     }} // END LOOP: for pt over inner boundary points
-  }} // END LOOP: for selected AUXEVOL gridfunctions
-}} // END FUNCTION: apply_inner_bc_for_selected_auxevol_gfs
+  }} // END LOOP: for selected spin scratch gridfunctions
+}} // END FUNCTION: apply_inner_bc_for_selected_spectre_spin_gfs
 """
         + _spectre_spin_potential_solver_prefunc(fd_order, ricci_c_code)
     )
@@ -1410,9 +1453,16 @@ static void apply_inner_bc_for_selected_auxevol_gfs(const bc_struct *restrict bc
     for(int ww=0;ww<3;ww++) xx[ww] = griddata[grid].xx[ww];
 #include "set_CodeParameters.h"
 
-    // This diagnostic owns ZU0GF, ZU1GF, and ZU2GF. After surface precompute
-    // and ghost-zone fill, bah_compute_spectre_spin_potentials() writes a
-    // normalized spin-potential basis before z_alpha * Omega is evaluated.
+    const size_t spectre_spin_npoints =
+        (size_t)Nxx_plus_2NGHOSTS0 * (size_t)Nxx_plus_2NGHOSTS1 * (size_t)Nxx_plus_2NGHOSTS2;
+    REAL *restrict spectre_spin_gfs =
+        (REAL *)malloc((size_t)NUM_SPECTRE_SPIN_SCRATCH_GFS * spectre_spin_npoints * sizeof(REAL));
+    if (spectre_spin_gfs == NULL)
+        return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+
+    // This diagnostic owns private ZU0GF, ZU1GF, and ZU2GF scratch slots. After
+    // surface precompute and ghost-zone fill, bah_compute_spectre_spin_potentials()
+    // writes a normalized spin-potential basis before z_alpha * Omega is evaluated.
     
     // Initialize all RunSums accumulators to zero.
     REAL A_sum = 0.0;
@@ -1449,16 +1499,18 @@ static void apply_inner_bc_for_selected_auxevol_gfs(const bc_struct *restrict bc
 
     {{
         const int spectre_spin_precompute_gfs[{len(gf_macros)}] = {{{selected_precompute_gfs}}};
-        apply_inner_bc_for_selected_auxevol_gfs(
-            &griddata[grid].bcstruct, auxevol_gfs, Nxx0, Nxx_plus_2NGHOSTS0,
+        apply_inner_bc_for_selected_spectre_spin_gfs(
+            &griddata[grid].bcstruct, spectre_spin_gfs, Nxx0, Nxx_plus_2NGHOSTS0,
             Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2,
-            spectre_spin_precompute_gfs, {len(gf_macros)}, spectre_spin_auxevol_gf_parity);
+            spectre_spin_precompute_gfs, {len(gf_macros)}, spectre_spin_scratch_gf_parity);
     }} // END BLOCK: fill SE_qDD and SE_XD ghost zones before differentiating them
 
     const int spin_potential_status =
-        bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs);
-    if (spin_potential_status != BHAHAHA_SUCCESS)
+        bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs);
+    if (spin_potential_status != BHAHAHA_SUCCESS) {{
+        free(spectre_spin_gfs);
         return spin_potential_status;
+    }}
 
 #pragma omp parallel
 {{
@@ -1589,8 +1641,12 @@ bhahaha_diags->spin_chi_x_spectre = spin_U[0];
 bhahaha_diags->spin_chi_y_spectre = spin_U[1];
 bhahaha_diags->spin_chi_z_spectre = spin_U[2];
 
+free(spectre_spin_gfs);
 return BHAHAHA_SUCCESS;
 """
+    _restore_private_spectre_spin_gridfunctions(saved_spectre_spin_gfs)
+    formatted_body = clang_format(body)
+
     # Format and register the C function using the standard helper.
     cfc.register_CFunction(
         subdirectory="",
@@ -1601,7 +1657,7 @@ return BHAHAHA_SUCCESS;
         name=cfunc_name,
         params=params,
         include_CodeParameters_h=False,
-        body=clang_format(body),
+        body=formatted_body,
     )
     return pcg.NRPyEnv()
 

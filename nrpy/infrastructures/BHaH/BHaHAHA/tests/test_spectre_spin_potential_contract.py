@@ -8,11 +8,15 @@ def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
     source = (BHHAHA_DIR / "spectre_spin_integrator.py").read_text()
 
     helper_idx = source.index("static int bah_compute_spectre_spin_potentials")
-    call_idx = source.index("bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs)")
+    call_idx = source.index(
+        "bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs)"
+    )
     integration_idx = source.index("#pragma omp parallel\n{{\n    // Private accumulators")
 
     assert helper_idx < call_idx < integration_idx
-    assert "auxevol_gfs[IDX4(ZU0GF, i0, i1, i2)] = z_init;" in source
+    assert "REAL *restrict spectre_spin_gfs" in source
+    assert "spectre_spin_gfs[IDX4(ZU0GF, i0, i1, i2)] = z_init;" in source
+    assert "auxevol_gfs[IDX4(ZU0GF" not in source
     assert "dprimme(evals, evecs_red, resnorms, &primme)" in source
     assert "primme.massMatrixMatvec = spectre_spin_primme_M_matvec;" in source
     assert "target_grad_norm = area * area / (6.0 * M_PI)" in source
@@ -20,19 +24,37 @@ def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
     assert "return spin_potential_status;" in source
 
 
-def test_final_diagnostics_propagates_spectre_spin_failure() -> None:
+def test_final_diagnostics_treats_spectre_spin_failure_as_optional() -> None:
     source = (BHHAHA_DIR / "diagnostics.py").read_text()
 
-    assert (
-        "commondata->error_flag = bah_diagnostics_spectre_spin(commondata, griddata);"
-        in source
-    )
-    assert (
-        "if (commondata->error_flag != BHAHAHA_SUCCESS)\n"
-        "        return;\n\n"
-        "      // Display detailed final iteration diagnostics"
-        in source
-    )
+    assert "commondata->error_flag = bah_diagnostics_spectre_spin" not in source
+    assert "const int spin_rc = bah_diagnostics_spectre_spin(commondata, griddata);" in source
+    assert "continuing without spin output" in source
+    assert "BHAHAHA_DIAGNOSTIC_UNAVAILABLE" in source
+
+
+def test_spectre_spin_gridfunctions_are_not_registered_as_auxevol() -> None:
+    source = (BHHAHA_DIR / "spectre_spin_integrator.py").read_text()
+
+    for gf_name in ["SE_qDD", "SE_XD", "zU"]:
+        gf_idx = source.index(f'"{gf_name}"')
+        registration_slice = source[gf_idx : gf_idx + 220]
+        assert 'group="AUXEVOL"' not in registration_slice
+
+    assert 'gf_array_name="spectre_spin_gfs"' in source
+    assert "_restore_private_spectre_spin_gridfunctions(saved_spectre_spin_gfs)" in source
+
+
+def test_spectre_spin_unavailable_sentinel_is_initialized() -> None:
+    header = (BHHAHA_DIR / "BHaHAHA_header.h").read_text()
+    find_horizon = (BHHAHA_DIR / "find_horizon.py").read_text()
+    file_output = (BHHAHA_DIR / "diagnostics_file_output.py").read_text()
+
+    assert "#define BHAHAHA_DIAGNOSTIC_UNAVAILABLE (-10.0)" in header
+    assert "bah_initialize_diagnostics_struct" in header
+    assert "diags->spin_chi_x_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;" in header
+    assert "bah_initialize_diagnostics_struct(commondata.bhahaha_diagnostics);" in find_horizon
+    assert "diags->spin_chi_x_spectre != BHAHAHA_DIAGNOSTIC_UNAVAILABLE" in file_output
 
 
 def test_spectre_spin_potential_failure_has_error_code() -> None:
