@@ -1048,8 +1048,10 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.matrixMatvec = spectre_spin_primme_K_matvec;
   primme.massMatrixMatvec = spectre_spin_primme_M_matvec;
   primme.matrix = &ctx;
-  primme.eps = 1.0e-10;
-  primme.printLevel = 0;
+  primme.eps = 1.0e-8;
+  primme.maxMatvecs = 5000;
+  primme.maxOuterIter = 500;
+  primme.printLevel = 1;
   primme_set_method(PRIMME_LOBPCG_OrthoBasis, &primme);
 
   for (int i = 0; i < 3 * Nred; i++)
