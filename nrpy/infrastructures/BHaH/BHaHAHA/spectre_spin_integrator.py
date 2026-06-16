@@ -361,6 +361,139 @@ static void spectre_spin_csr_matvec(const spectre_spin_csr_matrix *restrict csr,
   }
 }
 
+static REAL spectre_spin_full_dot(const int N, const REAL *restrict x, const REAL *restrict y) {
+  REAL sum = 0.0;
+  for (int i = 0; i < N; i++)
+    sum += x[i] * y[i];
+  return sum;
+}
+
+static REAL spectre_spin_full_l2_norm(const int N, const REAL *restrict x) {
+  REAL sum = 0.0;
+  for (int i = 0; i < N; i++)
+    sum += x[i] * x[i];
+  return sqrt(sum);
+}
+
+static void spectre_spin_csr_diag_range(const spectre_spin_csr_matrix *restrict csr, REAL *restrict min_diag, REAL *restrict max_diag,
+                                        int *restrict missing_diag_count) {
+  int have_diag = 0;
+  *missing_diag_count = 0;
+  *min_diag = 0.0;
+  *max_diag = 0.0;
+  for (int row = 0; row < csr->rows; row++) {
+    int found = 0;
+    REAL diag = 0.0;
+    for (int jj = csr->rowptr[row]; jj < csr->rowptr[row + 1]; jj++) {
+      if (csr->colind[jj] == row) {
+        diag = csr->vals[jj];
+        found = 1;
+        break;
+      }
+    }
+    if (!found) {
+      (*missing_diag_count)++;
+      continue;
+    }
+    if (!have_diag) {
+      *min_diag = diag;
+      *max_diag = diag;
+      have_diag = 1;
+    } else {
+      if (diag < *min_diag)
+        *min_diag = diag;
+      if (diag > *max_diag)
+        *max_diag = diag;
+    }
+  }
+}
+
+static void spectre_spin_fill_coordinate_seed_full(const int mode, const int N, const REAL *restrict x_ref, const REAL x_centroid[3],
+                                                   REAL *restrict seed) {
+  for (int p = 0; p < N; p++)
+    seed[p] = x_ref[(size_t)mode * (size_t)N + p] - x_centroid[mode];
+}
+
+static void spectre_spin_seed_coordinate_reduced(const int N, const int Nred, const int *restrict red_to_full, const REAL *restrict x_ref,
+                                                 const REAL x_centroid[3], double *restrict evecs_red) {
+  for (int mode = 0; mode < 3; mode++) {
+    for (int r = 0; r < Nred; r++) {
+      const int full = red_to_full[r];
+      evecs_red[(size_t)mode * (size_t)Nred + r] = (double)(x_ref[(size_t)mode * (size_t)N + full] - x_centroid[mode]);
+    }
+  }
+}
+
+static REAL spectre_spin_coordinate_seed_max_symmetry_error(const int N, const spectre_spin_csr_matrix *restrict csr,
+                                                            REAL *restrict seed_storage, REAL *restrict matvec_storage) {
+  REAL max_abs_skew = 0.0;
+  for (int j = 0; j < 3; j++) {
+    for (int i = 0; i < j; i++) {
+      spectre_spin_csr_matvec(csr, &seed_storage[(size_t)j * (size_t)N], matvec_storage);
+      const REAL lhs = spectre_spin_full_dot(N, &seed_storage[(size_t)i * (size_t)N], matvec_storage);
+      spectre_spin_csr_matvec(csr, &seed_storage[(size_t)i * (size_t)N], matvec_storage);
+      const REAL rhs = spectre_spin_full_dot(N, &seed_storage[(size_t)j * (size_t)N], matvec_storage);
+      const REAL skew = fabs(lhs - rhs);
+      if (skew > max_abs_skew)
+        max_abs_skew = skew;
+    }
+  }
+  return max_abs_skew;
+}
+
+static void spectre_spin_print_eigenproblem_diagnostics(const int Ntheta, const int Nphi, const int N, const int Nred, const REAL area,
+                                                        const int anchor, const REAL mu_anchor, const REAL *restrict mu,
+                                                        const spectre_spin_csr_matrix *restrict K_csr,
+                                                        const spectre_spin_csr_matrix *restrict M_csr, const REAL *restrict x_ref,
+                                                        const REAL x_centroid[3], REAL *restrict full_x, REAL *restrict full_y,
+                                                        REAL *restrict seed_storage) {
+  REAL K_min_diag, K_max_diag, M_min_diag, M_max_diag;
+  int K_missing_diag, M_missing_diag;
+  spectre_spin_csr_diag_range(K_csr, &K_min_diag, &K_max_diag, &K_missing_diag);
+  spectre_spin_csr_diag_range(M_csr, &M_min_diag, &M_max_diag, &M_missing_diag);
+
+  for (int mode = 0; mode < 3; mode++)
+    spectre_spin_fill_coordinate_seed_full(mode, N, x_ref, x_centroid, &seed_storage[(size_t)mode * (size_t)N]);
+
+  const REAL K_seed_skew = spectre_spin_coordinate_seed_max_symmetry_error(N, K_csr, seed_storage, full_y);
+  const REAL M_seed_skew = spectre_spin_coordinate_seed_max_symmetry_error(N, M_csr, seed_storage, full_y);
+
+  fprintf(stderr,
+          "INFO: SpECTRE spin eigenproblem: Ntheta=%d Nphi=%d Nred=%d area=%+.17e "
+          "anchor=%d mu_anchor=%+.17e K_nnz=%d M_nnz=%d\n",
+          Ntheta, Nphi, Nred, (double)area, anchor, (double)mu_anchor, K_csr->nnz, M_csr->nnz);
+  fprintf(stderr,
+          "INFO: SpECTRE spin matrix diag: K=[%+.17e,%+.17e] missing=%d "
+          "M=[%+.17e,%+.17e] missing=%d seed_sym_skew=(K=%+.17e,M=%+.17e)\n",
+          (double)K_min_diag, (double)K_max_diag, K_missing_diag, (double)M_min_diag, (double)M_max_diag, M_missing_diag,
+          (double)K_seed_skew, (double)M_seed_skew);
+
+  for (int mode = 0; mode < 3; mode++) {
+    REAL weighted_mean = 0.0;
+    for (int p = 0; p < N; p++)
+      weighted_mean += mu[p] * seed_storage[(size_t)mode * (size_t)N + p];
+
+    spectre_spin_csr_matvec(K_csr, &seed_storage[(size_t)mode * (size_t)N], full_x);
+    spectre_spin_csr_matvec(M_csr, &seed_storage[(size_t)mode * (size_t)N], full_y);
+    const REAL K_norm = spectre_spin_full_l2_norm(N, full_x);
+    const REAL K_rayleigh = spectre_spin_full_dot(N, &seed_storage[(size_t)mode * (size_t)N], full_x);
+    const REAL M_rayleigh = spectre_spin_full_dot(N, &seed_storage[(size_t)mode * (size_t)N], full_y);
+    const REAL lambda = M_rayleigh != 0.0 ? K_rayleigh / M_rayleigh : (REAL)NAN;
+    REAL residual_sq = 0.0;
+    for (int p = 0; p < N; p++) {
+      const REAL residual = full_x[p] - lambda * full_y[p];
+      residual_sq += residual * residual;
+    }
+    const REAL residual_l2 = sqrt(residual_sq);
+    const REAL residual_rel = residual_l2 / fmax(K_norm, (REAL)1.0);
+    fprintf(stderr,
+            "INFO: SpECTRE spin coordinate seed %d: weighted_mean=%+.17e "
+            "K_rayleigh=%+.17e M_rayleigh=%+.17e lambda=%+.17e residual_l2=%+.17e residual_rel=%+.17e\n",
+            mode, (double)weighted_mean, (double)K_rayleigh, (double)M_rayleigh, (double)lambda, (double)residual_l2,
+            (double)residual_rel);
+  }
+}
+
 static void spectre_spin_expand_reduced(const spectre_spin_primme_ctx *restrict ctx, const double *restrict xred, REAL *restrict xfull) {
   for (int i = 0; i < ctx->nfull; i++)
     xfull[i] = 0.0;
@@ -675,8 +808,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   for (int ww = 0; ww < 3; ww++)
     xx[ww] = griddata[grid].xx[ww];
 #include "set_CodeParameters.h"
-
-  (void)commondata;
 
 #ifdef NDEBUG
   const REAL z_init = 0.0;
@@ -1039,23 +1170,42 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       .full_x = full_x,
       .full_y = full_y};
 
+  if (commondata->bhahaha_params_and_data == NULL || commondata->bhahaha_params_and_data->verbosity_level > 0)
+    spectre_spin_print_eigenproblem_diagnostics(Ntheta, Nphi, N, Nred, area, anchor, mu_anchor, mu, &K_csr, &M_csr, x_ref, x_centroid,
+                                                full_x, full_y, evecs_full);
+
   primme_params primme;
   primme_initialize(&primme);
   primme.n = Nred;
   primme.nLocal = Nred;
   primme.numEvals = 3;
-  primme.target = primme_smallest;
+
+  static double target_shift = 0.0;                             // start new block
+  primme.target = primme_closest_abs;
+  primme.numTargetShifts = 1;
+  primme.targetShifts = &target_shift;                          // might should be primme_closest_abs
+  
   primme.matrixMatvec = spectre_spin_primme_K_matvec;
   primme.massMatrixMatvec = spectre_spin_primme_M_matvec;
   primme.matrix = &ctx;
-  primme.eps = 1.0e-8;
-  primme.maxMatvecs = 5000;
-  primme.maxOuterIter = 500;
-  primme.printLevel = 1;
-  primme_set_method(PRIMME_LOBPCG_OrthoBasis, &primme);
+  primme.eps = 1.0e-6;
+  primme.maxMatvecs = 50000;
+  primme.maxOuterIterations = 5000;
+  primme.printLevel = 2;
+  primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);     // play around with more robust methods since we're getting convergence issues
+  primme.initSize = 3;
+  primme.maxBasisSize = 60;
+  primme.minRestartSize = 20;                               // this line plus those on either side are new and haven't been run yet. intended to help with convergence issues
+  primme.maxBlockSize = 4;
+  spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);
 
-  for (int i = 0; i < 3 * Nred; i++)
-    evecs_red[i] = 0.0;
+  if (commondata->bhahaha_params_and_data == NULL || commondata->bhahaha_params_and_data->verbosity_level > 0) {
+    fprintf(stderr,
+            "INFO: SpECTRE spin PRIMME setup: eps=%+.3e maxMatvecs=%lld "
+            "maxOuterIterations=%lld initSize=%d maxBasisSize=%d minRestartSize=%d maxBlockSize=%d\n",
+            (double)primme.eps, (long long)primme.maxMatvecs, (long long)primme.maxOuterIterations, primme.initSize,
+            primme.maxBasisSize, primme.minRestartSize, primme.maxBlockSize);
+  }
   const int primme_status = dprimme(evals, evecs_red, resnorms, &primme);
   primme_free(&primme);
   if (primme_status != 0) {
@@ -1077,7 +1227,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(resnorms);
     free(evecs_full);
     free(modes);
-    return DIAG_SPECTRE_SPIN_POTENTIAL_PRIMME_ERROR;
+    return DIAG_SPECTRE_SPIN_POTENTIAL_PRIMME_ERROR; // TODO 6/12: make sure this is handled correctly by the caller
   }
   for (int a = 0; a < 3; a++) {
     if (!isfinite(evals[a]) || !isfinite(resnorms[a])) {
@@ -1441,6 +1591,34 @@ static void apply_inner_bc_for_selected_spectre_spin_gfs(const bc_struct *restri
     }} // END LOOP: for pt over inner boundary points
   }} // END LOOP: for selected spin scratch gridfunctions
 }} // END FUNCTION: apply_inner_bc_for_selected_spectre_spin_gfs
+
+static int spectre_spin_check_finite_scratch_gfs(const REAL *restrict spectre_spin_gfs, const int Nxx0, const int Nxx_plus_2NGHOSTS0,
+                                                 const int Nxx_plus_2NGHOSTS1, const int Nxx_plus_2NGHOSTS2,
+                                                 const int *restrict which_gfs, const int num_gfs, const int i1_min,
+                                                 const int i1_max, const int i2_min, const int i2_max, const char *restrict stage) {{
+  if (NGHOSTS < 0 || NGHOSTS + Nxx0 > Nxx_plus_2NGHOSTS0 ||
+      i1_min < 0 || i2_min < 0 || i1_max > Nxx_plus_2NGHOSTS1 || i2_max > Nxx_plus_2NGHOSTS2)
+    return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+
+  for (int gf_idx = 0; gf_idx < num_gfs; gf_idx++) {{
+    const int gf = which_gfs[gf_idx];
+    for (int i2 = i2_min; i2 < i2_max; i2++) {{
+      for (int i1 = i1_min; i1 < i1_max; i1++) {{
+        for (int i0 = NGHOSTS; i0 < NGHOSTS + Nxx0; i0++) {{
+          const REAL val = spectre_spin_gfs[IDX4(gf, i0, i1, i2)];
+          if (!isfinite(val)) {{
+            fprintf(stderr,
+                    "WARNING: SpECTRE spin scratch check failed after %s: "
+                    "gf=%d i0=%d i1=%d i2=%d value=%+.17e\n",
+                    stage, gf, i0, i1, i2, (double)val);
+            return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+          }}
+        }} // END LOOP: i0
+      }} // END LOOP: i1
+    }} // END LOOP: i2
+  }} // END LOOP: gf_idx
+  return BHAHAHA_SUCCESS;
+}} // END FUNCTION: spectre_spin_check_finite_scratch_gfs
 """
         + _spectre_spin_potential_solver_prefunc(fd_order, ricci_c_code)
     )
@@ -1461,6 +1639,8 @@ static void apply_inner_bc_for_selected_spectre_spin_gfs(const bc_struct *restri
         (REAL *)malloc((size_t)NUM_SPECTRE_SPIN_SCRATCH_GFS * spectre_spin_npoints * sizeof(REAL));
     if (spectre_spin_gfs == NULL)
         return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    for (size_t idx = 0; idx < (size_t)NUM_SPECTRE_SPIN_SCRATCH_GFS * spectre_spin_npoints; idx++)
+        spectre_spin_gfs[idx] = (REAL)NAN;
 
     // This diagnostic owns private ZU0GF, ZU1GF, and ZU2GF scratch slots. After
     // surface precompute and ghost-zone fill, bah_compute_spectre_spin_potentials()
@@ -1501,10 +1681,29 @@ static void apply_inner_bc_for_selected_spectre_spin_gfs(const bc_struct *restri
 
     {{
         const int spectre_spin_precompute_gfs[{len(gf_macros)}] = {{{selected_precompute_gfs}}};
+        int spectre_spin_scratch_status = spectre_spin_check_finite_scratch_gfs(
+            spectre_spin_gfs, Nxx0, Nxx_plus_2NGHOSTS0, Nxx_plus_2NGHOSTS1,
+            Nxx_plus_2NGHOSTS2, spectre_spin_precompute_gfs, {len(gf_macros)},
+            NGHOSTS, NGHOSTS + Nxx1, NGHOSTS, NGHOSTS + Nxx2, "physical precompute");
+        if (spectre_spin_scratch_status != BHAHAHA_SUCCESS) {{
+            free(spectre_spin_gfs);
+            return spectre_spin_scratch_status;
+        }}
+
         apply_inner_bc_for_selected_spectre_spin_gfs(
             &griddata[grid].bcstruct, spectre_spin_gfs, Nxx0, Nxx_plus_2NGHOSTS0,
             Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2,
             spectre_spin_precompute_gfs, {len(gf_macros)}, spectre_spin_scratch_gf_parity);
+
+        spectre_spin_scratch_status = spectre_spin_check_finite_scratch_gfs(
+            spectre_spin_gfs, Nxx0, Nxx_plus_2NGHOSTS0, Nxx_plus_2NGHOSTS1,
+            Nxx_plus_2NGHOSTS2, spectre_spin_precompute_gfs, {len(gf_macros)},
+            NGHOSTS - {fd_order // 2}, NGHOSTS + Nxx1 + {fd_order // 2},
+            NGHOSTS - {fd_order // 2}, NGHOSTS + Nxx2 + {fd_order // 2}, "ghost-zone fill");
+        if (spectre_spin_scratch_status != BHAHAHA_SUCCESS) {{
+            free(spectre_spin_gfs);
+            return spectre_spin_scratch_status;
+        }}
     }} // END BLOCK: fill SE_qDD and SE_XD ghost zones before differentiating them
 
     const int spin_potential_status =
@@ -1512,6 +1711,18 @@ static void apply_inner_bc_for_selected_spectre_spin_gfs(const bc_struct *restri
     if (spin_potential_status != BHAHAHA_SUCCESS) {{
         free(spectre_spin_gfs);
         return spin_potential_status;
+    }}
+
+    {{
+        const int spectre_spin_z_gfs[3] = {{ZU0GF, ZU1GF, ZU2GF}};
+        const int spectre_spin_z_status = spectre_spin_check_finite_scratch_gfs(
+            spectre_spin_gfs, Nxx0, Nxx_plus_2NGHOSTS0, Nxx_plus_2NGHOSTS1,
+            Nxx_plus_2NGHOSTS2, spectre_spin_z_gfs, 3,
+            NGHOSTS, NGHOSTS + Nxx1, NGHOSTS, NGHOSTS + Nxx2, "spin-potential solve");
+        if (spectre_spin_z_status != BHAHAHA_SUCCESS) {{
+            free(spectre_spin_gfs);
+            return spectre_spin_z_status;
+        }}
     }}
 
 #pragma omp parallel

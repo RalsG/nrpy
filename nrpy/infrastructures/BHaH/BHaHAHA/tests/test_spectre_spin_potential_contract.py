@@ -12,13 +12,23 @@ def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
         "bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs)"
     )
     integration_idx = source.index("#pragma omp parallel\n{{\n    // Private accumulators")
+    primme_method_idx = source.index("primme_set_method(PRIMME_LOBPCG_OrthoBasis, &primme);")
+    primme_init_size_idx = source.index("primme.initSize = 3;")
+    primme_seed_idx = source.index("spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);")
+    primme_call_idx = source.index("dprimme(evals, evecs_red, resnorms, &primme)")
 
     assert helper_idx < call_idx < integration_idx
+    assert primme_method_idx < primme_init_size_idx < primme_seed_idx < primme_call_idx
     assert "REAL *restrict spectre_spin_gfs" in source
     assert "spectre_spin_gfs[IDX4(ZU0GF, i0, i1, i2)] = z_init;" in source
     assert "auxevol_gfs[IDX4(ZU0GF" not in source
     assert "dprimme(evals, evecs_red, resnorms, &primme)" in source
     assert "primme.massMatrixMatvec = spectre_spin_primme_M_matvec;" in source
+    assert "primme.initSize = 3;" in source
+    assert "evecs_red[i] = 0.0;" not in source
+    assert "SpECTRE spin eigenproblem" in source
+    assert "SpECTRE spin coordinate seed" in source
+    assert "SpECTRE spin PRIMME setup" in source
     assert "target_grad_norm = area * area / (6.0 * M_PI)" in source
     assert "K z = lambda M z" in source
     assert "return spin_potential_status;" in source
@@ -43,6 +53,17 @@ def test_spectre_spin_gridfunctions_are_not_registered_as_auxevol() -> None:
 
     assert 'gf_array_name="spectre_spin_gfs"' in source
     assert "_restore_private_spectre_spin_gridfunctions(saved_spectre_spin_gfs)" in source
+
+
+def test_spectre_spin_scratch_is_poisoned_and_checked() -> None:
+    source = (BHHAHA_DIR / "spectre_spin_integrator.py").read_text()
+
+    assert "spectre_spin_gfs[idx] = (REAL)NAN;" in source
+    assert "static int spectre_spin_check_finite_scratch_gfs" in source
+    assert '"physical precompute"' in source
+    assert '"ghost-zone fill"' in source
+    assert '"spin-potential solve"' in source
+    assert "WARNING: SpECTRE spin scratch check failed after %s" in source
 
 
 def test_spectre_spin_unavailable_sentinel_is_initialized() -> None:
