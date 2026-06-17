@@ -1410,7 +1410,7 @@ def register_CFunction_diagnostics_spectre_spin(
 
     includes = ["BHaH_defines.h", "BHaH_function_prototypes.h", "primme.h"]
     desc = r"""
-    Compute the SpECTRE-style spin vector diagnostic and store it in the diagnostics struct.
+    Compute the SpECTRE-style dimensionless spin vector diagnostic and store it in the diagnostics struct.
     """
     cfunc_type = "int"
     cfunc_name = "diagnostics_spectre_spin"
@@ -1799,7 +1799,7 @@ static int spectre_spin_check_finite_scratch_gfs(const REAL *restrict spectre_sp
     } // END OMP CRITICAL: update shared spin-diagnostic sums
 } // END OMP PARALLEL: integrate spin diagnostic
 
-// Step 8: Compute the spin vector from the integrated quantities.
+// Step 8: Compute the dimensionless spin vector from the integrated quantities.
 bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
 
 const REAL surface_weight = dxx1 * dxx2;
@@ -1825,7 +1825,8 @@ const REAL ZOU[3] = {
     ZOU_sum[2] * surface_weight};
 const REAL Oabs = Oabs_sum * surface_weight;
 
-REAL spin_U[3] = {0.0, 0.0, 0.0};
+REAL S_U[3] = {0.0, 0.0, 0.0};
+REAL chi_U[3] = {0.0, 0.0, 0.0};
 
 if (fabs(A) > spin_norm_tolerance) {
     REAL x0U[3], xRcorrU[3], IU[3], SalphaU[3];
@@ -1843,16 +1844,25 @@ if (fabs(A) > spin_norm_tolerance) {
 
     if (Oabs > spin_norm_tolerance && normI > spin_norm_tolerance) {
         for (int i = 0; i < 3; i++)
-            spin_U[i] = S * IU[i] / normI;
+            S_U[i] = S * IU[i] / normI;
     } else if (Salpha_norm > spin_norm_tolerance) {
         for (int i = 0; i < 3; i++)
-            spin_U[i] = S * SalphaU[i] / Salpha_norm;
+            S_U[i] = S * SalphaU[i] / Salpha_norm;
     } // END ELSE IF: use z_alpha fallback direction when nominal direction is unsafe
+
+    const REAL M_irr_squared = A / (16.0 * M_PI);
+    if (M_irr_squared > 0.0 && isfinite(M_irr_squared)) {
+        const REAL M_horizon_squared = M_irr_squared + S * S / (4.0 * M_irr_squared);
+        if (M_horizon_squared > 0.0 && isfinite(M_horizon_squared)) {
+            for (int i = 0; i < 3; i++)
+                chi_U[i] = S_U[i] / M_horizon_squared;
+        } // END IF: Christodoulou mass squared is safe
+    } // END IF: irreducible mass squared is safe
 } // END IF: area is safe for centroid reduction
 
-bhahaha_diags->spin_chi_x_spectre = spin_U[0];
-bhahaha_diags->spin_chi_y_spectre = spin_U[1];
-bhahaha_diags->spin_chi_z_spectre = spin_U[2];
+bhahaha_diags->spin_chi_x_spectre = chi_U[0];
+bhahaha_diags->spin_chi_y_spectre = chi_U[1];
+bhahaha_diags->spin_chi_z_spectre = chi_U[2];
 
 free(spectre_spin_gfs);
 return BHAHAHA_SUCCESS;

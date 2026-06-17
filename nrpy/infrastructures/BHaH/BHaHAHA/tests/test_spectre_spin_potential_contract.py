@@ -12,7 +12,7 @@ def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
         "bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs)"
     )
     integration_idx = source.index("#pragma omp parallel\n{{\n    // Private accumulators")
-    primme_method_idx = source.index("primme_set_method(PRIMME_LOBPCG_OrthoBasis, &primme);")
+    primme_method_idx = source.index("primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);")
     primme_init_size_idx = source.index("primme.initSize = 3;")
     primme_seed_idx = source.index("spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);")
     primme_call_idx = source.index("dprimme(evals, evecs_red, resnorms, &primme)")
@@ -64,6 +64,32 @@ def test_spectre_spin_scratch_is_poisoned_and_checked() -> None:
     assert '"ghost-zone fill"' in source
     assert '"spin-potential solve"' in source
     assert "WARNING: SpECTRE spin scratch check failed after %s" in source
+
+
+def test_spectre_spin_output_is_dimensionless_chi() -> None:
+    source = (BHHAHA_DIR / "spectre_spin_integrator.py").read_text()
+    equations = (
+        BHHAHA_DIR.parents[2]
+        / "equations"
+        / "general_relativity"
+        / "bhahaha"
+        / "SpECTRESpinEstimate.py"
+    ).read_text()
+    file_output = (BHHAHA_DIR / "diagnostics_file_output.py").read_text()
+
+    assert "REAL S_U[3]" in source
+    assert "REAL chi_U[3]" in source
+    assert "const REAL M_irr_squared = A / (16.0 * M_PI);" in source
+    assert (
+        "const REAL M_horizon_squared = M_irr_squared + S * S / (4.0 * M_irr_squared);"
+        in source
+    )
+    assert "chi_U[i] = S_U[i] / M_horizon_squared;" in source
+    assert "bhahaha_diags->spin_chi_x_spectre = chi_U[0];" in source
+    assert "bhahaha_diags->spin_chi_x_spectre = S_U[0];" not in source
+    assert "christodoulou_mass_squared_from_area_and_spin" in equations
+    assert "chiU_nominal" in equations
+    assert "Dimensionless spin x-component (based on spin function Omega)" in file_output
 
 
 def test_spectre_spin_unavailable_sentinel_is_initialized() -> None:
