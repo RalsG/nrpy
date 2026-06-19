@@ -1,7 +1,10 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
-
 BHHAHA_DIR = Path(__file__).resolve().parents[1]
+REPO_ROOT = BHHAHA_DIR.parents[3]
 
 
 def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
@@ -11,10 +14,16 @@ def test_spectre_spin_diagnostic_computes_z_modes_before_integrating() -> None:
     call_idx = source.index(
         "bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs)"
     )
-    integration_idx = source.index("#pragma omp parallel\n{{\n    // Private accumulators")
-    primme_method_idx = source.index("primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);")
+    integration_idx = source.index(
+        "#pragma omp parallel\n{{\n    // Private accumulators"
+    )
+    primme_method_idx = source.index(
+        "primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);"
+    )
     primme_init_size_idx = source.index("primme.initSize = 3;")
-    primme_seed_idx = source.index("spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);")
+    primme_seed_idx = source.index(
+        "spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);"
+    )
     primme_call_idx = source.index("dprimme(evals, evecs_red, resnorms, &primme)")
 
     assert helper_idx < call_idx < integration_idx
@@ -38,7 +47,10 @@ def test_final_diagnostics_treats_spectre_spin_failure_as_optional() -> None:
     source = (BHHAHA_DIR / "diagnostics.py").read_text()
 
     assert "commondata->error_flag = bah_diagnostics_spectre_spin" not in source
-    assert "const int spin_rc = bah_diagnostics_spectre_spin(commondata, griddata);" in source
+    assert (
+        "const int spin_rc = bah_diagnostics_spectre_spin(commondata, griddata);"
+        in source
+    )
     assert "continuing without spin output" in source
     assert "BHAHAHA_DIAGNOSTIC_UNAVAILABLE" in source
 
@@ -52,7 +64,9 @@ def test_spectre_spin_gridfunctions_are_not_registered_as_auxevol() -> None:
         assert 'group="AUXEVOL"' not in registration_slice
 
     assert 'gf_array_name="spectre_spin_gfs"' in source
-    assert "_restore_private_spectre_spin_gridfunctions(saved_spectre_spin_gfs)" in source
+    assert (
+        "_restore_private_spectre_spin_gridfunctions(saved_spectre_spin_gfs)" in source
+    )
 
 
 def test_spectre_spin_scratch_is_poisoned_and_checked() -> None:
@@ -89,7 +103,9 @@ def test_spectre_spin_output_is_dimensionless_chi() -> None:
     assert "bhahaha_diags->spin_chi_x_spectre = S_U[0];" not in source
     assert "christodoulou_mass_squared_from_area_and_spin" in equations
     assert "chiU_nominal" in equations
-    assert "Dimensionless spin x-component (based on spin function Omega)" in file_output
+    assert (
+        "Dimensionless spin x-component (based on spin function Omega)" in file_output
+    )
 
 
 def test_spectre_spin_unavailable_sentinel_is_initialized() -> None:
@@ -100,7 +116,10 @@ def test_spectre_spin_unavailable_sentinel_is_initialized() -> None:
     assert "#define BHAHAHA_DIAGNOSTIC_UNAVAILABLE (-10.0)" in header
     assert "bah_initialize_diagnostics_struct" in header
     assert "diags->spin_chi_x_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;" in header
-    assert "bah_initialize_diagnostics_struct(commondata.bhahaha_diagnostics);" in find_horizon
+    assert (
+        "bah_initialize_diagnostics_struct(commondata.bhahaha_diagnostics);"
+        in find_horizon
+    )
     assert "diags->spin_chi_x_spectre != BHAHAHA_DIAGNOSTIC_UNAVAILABLE" in file_output
 
 
@@ -117,11 +136,72 @@ def test_spectre_spin_potential_failure_has_error_code() -> None:
         assert error_code in source
 
 
-def test_bhahaha_generator_requires_external_primme() -> None:
+def test_bhahaha_generator_uses_internal_primme() -> None:
     source = (BHHAHA_DIR.parents[2] / "examples" / "bhahaha.py").read_text()
 
-    assert "--primme-dir" in source
-    assert 'os.environ.get("PRIMME_DIR")' in source
-    assert 'Path(primme_include_dir, "primme.h").is_file()' in source
-    assert "include_dirs=[str(primme_include_dir)]" in source
-    assert "-L$PRIMME_DIR/lib -lprimme" in source
+    assert "--primme-dir" not in source
+    assert "PRIMME_DIR" not in source
+    assert "primme_include_dir" not in source
+    assert "include_dirs=[str(primme_include_dir)]" not in source
+    assert "-lprimme" not in source
+
+    assert "akv_primme_eigensolver" in source
+    assert "patch_makefile_for_internal_akv_primme" in source
+    assert "BHAHAHA_AKV_PRIMME_DOUBLE_ONLY" in source
+    assert "BHAHAHA_AKV_PRIMME_INTERNAL_BLASLAPACK" in source
+    assert "PRIMME_WITHOUT_FLOAT" in source
+    assert "OBJCOPY ?= objcopy" in source
+    assert "linkcheck" in source
+
+
+def test_spectre_spin_uses_internal_primme_header() -> None:
+    source = (BHHAHA_DIR / "spectre_spin_integrator.py").read_text()
+
+    assert '#include "akv_primme.h"' in source
+    assert '"akv_primme.h"' in source
+    assert "#include <primme.h>" not in source
+    assert '"primme.h"' not in source
+
+
+def test_internal_primme_vendor_tree_is_present() -> None:
+    vendor = BHHAHA_DIR / "akv_primme_eigensolver"
+
+    assert (vendor / "akv_primme.h").is_file()
+    assert (vendor / "primme_c.c").is_file()
+    assert (vendor / "akv_internal_blaslapack.c").is_file()
+    assert (vendor / "COPYING.txt").is_file()
+    assert "Imported version: 3.2.3" in (vendor / "FROZEN_FORK_FROM.md").read_text()
+
+
+def test_bhahaha_generation_copies_internal_primme_without_env(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env.pop("PRIMME_DIR", None)
+    env["PYTHONPATH"] = (
+        str(REPO_ROOT)
+        if "PYTHONPATH" not in env
+        else str(REPO_ROOT) + os.pathsep + env["PYTHONPATH"]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "nrpy.examples.bhahaha",
+            "--outrootdir",
+            str(tmp_path),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        check=True,
+    )
+
+    project = tmp_path / "BHaHAHA"
+    assert (project / "akv_primme_eigensolver" / "primme_c.c").is_file()
+    assert (project / "akv_primme_eigensolver" / "akv_primme.h").is_file()
+
+    makefile = (project / "Makefile").read_text()
+    assert "-Iakv_primme_eigensolver" in makefile
+    assert "akv_primme_eigensolver/primme_c.o" in makefile
+    assert "akv_primme_eigensolver/akv_internal_blaslapack.o" in makefile
+    assert "OBJCOPY ?= objcopy" in makefile
+    assert "linkcheck" in makefile

@@ -20,7 +20,6 @@ from nrpy.infrastructures.BHaH.CurviBoundaryConditions.apply_bcs_inner_only impo
     APPLY_PARITY_BRANCHLESS_PREFUNC,
 )
 
-
 _SPECTRE_SPIN_SCRATCH_GFS = (
     "SE_qDD00",
     "SE_qDD01",
@@ -33,7 +32,9 @@ _SPECTRE_SPIN_SCRATCH_GFS = (
 )
 
 
-def _register_private_spectre_spin_gridfunctions() -> Dict[str, Optional[gri.GridFunctionType]]:
+def _register_private_spectre_spin_gridfunctions() -> (
+    Dict[str, Optional[gri.GridFunctionType]]
+):
     """Temporarily register spin-only scratch gridfunctions for FD codegen."""
     saved_gfs = {
         gf_name: gri.glb_gridfcs_dict.get(gf_name)
@@ -87,8 +88,24 @@ def _central_fd_coefficients(fd_order: int) -> Tuple[List[float], List[float]]:
             [-1.0 / 12.0, 4.0 / 3.0, -5.0 / 2.0, 4.0 / 3.0, -1.0 / 12.0],
         ),
         6: (
-            [-1.0 / 60.0, 3.0 / 20.0, -3.0 / 4.0, 0.0, 3.0 / 4.0, -3.0 / 20.0, 1.0 / 60.0],
-            [1.0 / 90.0, -3.0 / 20.0, 3.0 / 2.0, -49.0 / 18.0, 3.0 / 2.0, -3.0 / 20.0, 1.0 / 90.0],
+            [
+                -1.0 / 60.0,
+                3.0 / 20.0,
+                -3.0 / 4.0,
+                0.0,
+                3.0 / 4.0,
+                -3.0 / 20.0,
+                1.0 / 60.0,
+            ],
+            [
+                1.0 / 90.0,
+                -3.0 / 20.0,
+                3.0 / 2.0,
+                -49.0 / 18.0,
+                3.0 / 2.0,
+                -3.0 / 20.0,
+                1.0 / 90.0,
+            ],
         ),
         8: (
             [
@@ -126,15 +143,13 @@ def _c_array(values: Sequence[float]) -> str:
     return ", ".join(f"{value:.17e}" for value in values)
 
 
-def _spectre_spin_potential_solver_prefunc(
-    fd_order: int, ricci_c_code: str
-) -> str:
+def _spectre_spin_potential_solver_prefunc(fd_order: int, ricci_c_code: str) -> str:
     first_deriv_coeffs, second_deriv_coeffs = _central_fd_coefficients(fd_order)
     radius = fd_order // 2
     max_row_nnz = 2 * (2 * radius + 1) ** 2 + 4 * (2 * radius + 1)
 
     template = r"""
-#include <primme.h>
+#include "akv_primme.h"
 
 #ifndef PRIMME_VERSION_MAJOR
 #define BHAHAHA_PRIMME_USES_LEGACY_MATVEC 1
@@ -534,7 +549,7 @@ static void spectre_spin_primme_K_matvec(void *x, void *y, int *blockSize, primm
 }
 
 static void spectre_spin_primme_M_matvec(void *x, void *y, int *blockSize, primme_params *primme, int *err) {
-  spectre_spin_primme_ctx *restrict ctx = (spectre_spin_primme_ctx *)primme->matrix;
+  spectre_spin_primme_ctx *restrict ctx = (spectre_spin_primme_ctx *)primme->massMatrix;
   spectre_spin_apply_reduced_operator(ctx, ctx->M, (const double *)x, (PRIMME_INT)ctx->nred, (double *)y, (PRIMME_INT)ctx->nred, *blockSize);
   *err = 0;
 }
@@ -548,7 +563,7 @@ static void spectre_spin_primme_K_matvec(void *x, PRIMME_INT *ldx, void *y, PRIM
 
 static void spectre_spin_primme_M_matvec(void *x, PRIMME_INT *ldx, void *y, PRIMME_INT *ldy, int *blockSize, primme_params *primme,
                                          int *err) {
-  spectre_spin_primme_ctx *restrict ctx = (spectre_spin_primme_ctx *)primme->matrix;
+  spectre_spin_primme_ctx *restrict ctx = (spectre_spin_primme_ctx *)primme->massMatrix;
   spectre_spin_apply_reduced_operator(ctx, ctx->M, (const double *)x, *ldx, (double *)y, *ldy, *blockSize);
   *err = 0;
 }
@@ -1187,7 +1202,12 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   
   primme.matrixMatvec = spectre_spin_primme_K_matvec;
   primme.massMatrixMatvec = spectre_spin_primme_M_matvec;
+  primme.matrixMatvec_type = primme_op_double;
+  primme.massMatrixMatvec_type = primme_op_double;
+  primme.ldOPs = Nred;
+  primme.ldevecs = Nred;
   primme.matrix = &ctx;
+  primme.massMatrix = &ctx;
   primme.eps = 1.0e-6;
   primme.maxMatvecs = 50000;
   primme.maxOuterIterations = 5000;
@@ -1401,6 +1421,12 @@ def register_CFunction_diagnostics_spectre_spin(
     :raises ValueError: If a precompute gridfunction has an unsupported rank.
 
     """
+    if par.parval_from_str("fp_type") != "double":
+        raise ValueError(
+            "SpECTRE spin diagnostics require fp_type=double because the "
+            "runtime eigensolver calls double-precision PRIMME (dprimme)."
+        )
+
     if pcg.pcg_registration_phase():
         pcg.register_func_call(
             f"{__name__}.{register_CFunction_diagnostics_spectre_spin.__name__}",
@@ -1408,7 +1434,7 @@ def register_CFunction_diagnostics_spectre_spin(
         )
         return None
 
-    includes = ["BHaH_defines.h", "BHaH_function_prototypes.h", "primme.h"]
+    includes = ["BHaH_defines.h", "BHaH_function_prototypes.h", "akv_primme.h"]
     desc = r"""
     Compute the SpECTRE-style dimensionless spin vector diagnostic and store it in the diagnostics struct.
     """
@@ -1542,9 +1568,7 @@ def register_CFunction_diagnostics_spectre_spin(
     )
     fd_order = int(par.parval_from_str("finite_difference::fd_order"))
 
-    prefunc = (
-        APPLY_PARITY_BRANCHLESS_PREFUNC
-        + rf"""
+    prefunc = APPLY_PARITY_BRANCHLESS_PREFUNC + rf"""
 #define NUM_SPECTRE_SPIN_SCRATCH_GFS {len(_SPECTRE_SPIN_SCRATCH_GFS)}
 {scratch_gf_defines}
 
@@ -1619,9 +1643,7 @@ static int spectre_spin_check_finite_scratch_gfs(const REAL *restrict spectre_sp
   }} // END LOOP: gf_idx
   return BHAHAHA_SUCCESS;
 }} // END FUNCTION: spectre_spin_check_finite_scratch_gfs
-"""
-        + _spectre_spin_potential_solver_prefunc(fd_order, ricci_c_code)
-    )
+""" + _spectre_spin_potential_solver_prefunc(fd_order, ricci_c_code)
 
     # Step 6: Construct the body of the C function.
     body = r"""
