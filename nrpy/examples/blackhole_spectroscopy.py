@@ -374,7 +374,7 @@ BHaH.checkpointing.register_CFunctions(
 )
 BHaH.diagnostics.progress_indicator.register_CFunction_progress_indicator()
 BHaH.general_relativity.basis_transforms.register_all.register_CFunctions(
-    set_of_CoordSystems=basis_transform_CoordSystems,
+    set_of_CoordSystems=set_of_CoordSystems,
 )
 BHaH.rfm_wrapper_functions.register_CFunctions_CoordSystem_wrapper_funcs()
 
