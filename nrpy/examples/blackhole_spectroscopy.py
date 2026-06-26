@@ -214,7 +214,7 @@ if parallelization == "cuda":
     BHaH.parallelization.cuda_utilities.register_CFunction_find_global_sum()
 
 BHaH.general_relativity.NRPyPN_quasicircular_momenta.register_CFunction_NRPyPN_quasicircular_momenta()
-BHaH.general_relativity.TwoPunctures.TwoPunctures_lib.register_C_functions()
+BHaH.general_relativity.TwoPunctures.TwoPunctures_lib.register_C_functions(enable_xy_plane=True)
 BHaH.general_relativity.initial_data.register_CFunction_initial_data(
     IDtype=IDtype,
     IDCoordSystem=IDCoordSystem,
