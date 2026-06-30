@@ -191,7 +191,7 @@ calculations, norm evaluations, and detailed final iteration analyses.
             fprintf(stderr, "WARNING: SpECTRE spin diagnostic failed with code %d; continuing without spin output.\n", spin_rc);
           }
         }
-      } // END IF: SpECTRE spin diagnostic enabled
+      } // END IF: compute and store spins if SpECTRE spin diagnostic enabled
 
       // Display detailed final iteration diagnostics if verbosity is enabled.
       {
