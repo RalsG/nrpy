@@ -1570,11 +1570,10 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.numEvals = 3;
 
   
-  // Target the smallest-magnitude eigenvalues near zero.
-  static double target_shift = 0.0;
-  primme.target = primme_closest_abs;
-  primme.numTargetShifts = 1;
-  primme.targetShifts = &target_shift;
+  // Target the smallest eigenvalues.
+  primme.target = primme_smallest;
+  primme.numTargetShifts = 0;
+  primme.targetShifts = NULL;
   
   primme.matrixMatvec = spectre_spin_primme_K_matvec;
   primme.massMatrixMatvec = spectre_spin_primme_M_matvec;
@@ -1587,11 +1586,11 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.eps = 1.0e-6;
   primme.maxMatvecs = 50000;
   primme.maxOuterIterations = 5000;
-  primme.printLevel = 1;
+  primme.printLevel = 3;
   primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);
   primme.initSize = 3;
-  primme.maxBasisSize = 60;
-  primme.minRestartSize = 20;
+  primme.maxBasisSize = 100;
+  primme.minRestartSize = 60;
   primme.maxBlockSize = 4;
   spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);
 
@@ -1749,6 +1748,11 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       status = DIAG_SPECTRE_SPIN_POTENTIAL_NORMALIZATION_ERROR;
   }
 
+  fprintf(stderr,
+        "AKV evals %.17e %.17e %.17e\nresnorms: %.3e %.3e %.3e\n",
+        evals[0], evals[1], evals[2],
+        resnorms[0], resnorms[1], resnorms[2]);
+  
   spectre_spin_csr_free(&K_csr);
   spectre_spin_csr_free(&M_csr);
   free(full_x);

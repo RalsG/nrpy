@@ -66,14 +66,16 @@ num_fisheye_transitions = (
     else None
 )
 
-initial_sep = 0.5
-mass_ratio = 1.0  # must be >= 1.0. Will need higher resolution for > 1.0.
+initial_sep = 4.5
+mass_ratio = 1e10  # must be >= 1.0. Will need higher resolution for > 1.0.
 BH_m_chix = 0.0  # dimensionless spin parameter for less-massive BH
 BH_M_chix = 0.0  # dimensionless spin parameter for more-massive BH
+BH_M_chiy = -0.6  # dimensionless spin parameter for more-massive BH
+BH_M_chiz = 0.45  # dimensionless spin parameter for more-massive BH
 initial_p_r = 0.0  # want this to be <= 0.0. 0.0 -> fall from rest, < 0.0 -> boosted toward each other.
 TP_npoints_A = 48
 TP_npoints_B = 48
-TP_npoints_phi = 4
+TP_npoints_phi = 64
 
 enable_KreissOliger_dissipation = True
 enable_CAKO = True
@@ -84,15 +86,15 @@ KreissOliger_strength_nongauge = 0.3
 LapseEvolutionOption = "OnePlusLog"
 ShiftEvolutionOption = "GammaDriving2ndOrder_Covariant"
 GammaDriving_eta = 2.0
-grid_physical_size = 300.0
+grid_physical_size = 5.0
 diagnostics_output_every = 0.5
 default_checkpoint_every = 2.0
 t_final = 1.5 * grid_physical_size
 swm2sh_maximum_l_mode_generated = 8
 swm2sh_maximum_l_mode_to_compute = 2  # for consistency with NRPy 1.0 version.
-enable_psi4_diagnostics = True
+enable_psi4_diagnostics = False
 Nxx_dict = {
-    "SinhSpherical": [800, 16, 2],
+    "SinhSpherical": [50, 100, 64],
     "SinhCylindrical": [400, 2, 1200],
     "GeneralRFM_fisheyeN1": [200, 200, 200],
     "GeneralRFM_fisheyeN2": [200, 200, 200],
@@ -118,9 +120,10 @@ elif num_fisheye_transitions == 2:
         "fisheye_phys_r_trans2": 150.0,
         "fisheye_phys_w_trans2": 20.0,
     }
-default_BH1_mass = default_BH2_mass = 0.5
-default_BH1_z_posn = +0.25
-default_BH2_z_posn = -0.25
+default_BH1_mass = 1.0
+default_BH2_mass = 1e-10
+default_BH1_z_posn = 0.0
+default_BH2_z_posn = 4.5
 MoL_method = "RK4"
 fd_order = 8
 radiation_BC_fd_order = 4
@@ -151,7 +154,7 @@ if "Spherical" in CoordSystem:
     if CoordSystem == "SinhSpherical":
         sinh_width = 0.2
 if "Cylindrical" in CoordSystem:
-    par.set_parval_from_str("symmetry_axes", "1")
+    # par.set_parval_from_str("symmetry_axes", "1")
     OMP_collapse = 2  # might be slightly faster
     if CoordSystem == "SinhCylindrical":
         sinh_width = 0.2
@@ -398,6 +401,8 @@ par.adjust_CodeParam_default("initial_sep", initial_sep)
 par.adjust_CodeParam_default("mass_ratio", mass_ratio)
 par.adjust_CodeParam_default("bbhxy_BH_m_chix", BH_m_chix)
 par.adjust_CodeParam_default("bbhxy_BH_M_chix", BH_M_chix)
+par.adjust_CodeParam_default("bbhxy_BH_M_chiy", BH_M_chiy)
+par.adjust_CodeParam_default("bbhxy_BH_M_chiz", BH_M_chiz)
 par.adjust_CodeParam_default("initial_p_t", 0.0)
 par.adjust_CodeParam_default("initial_p_r", initial_p_r)
 par.adjust_CodeParam_default("TP_npoints_A", TP_npoints_A)
@@ -426,7 +431,7 @@ if enable_bhahaha:
     par.adjust_CodeParam_default(
         "bah_max_search_radius",
         [
-            0.6 * default_BH1_mass,
+            0.75 * default_BH1_mass,
             0.6 * default_BH2_mass,
             1.1 * (default_BH1_mass + default_BH2_mass),
         ],
@@ -435,7 +440,7 @@ if enable_bhahaha:
         "bah_Theta_L2_times_M_tolerance",
         [2e-4, 2e-4, 2e-4],
     )
-    par.adjust_CodeParam_default("bah_enable_BBH_mode", 1)
+    par.adjust_CodeParam_default("bah_enable_BBH_mode", 0)
     par.adjust_CodeParam_default("bah_enable_spectre_spin_diagnostic", 1)
     par.adjust_CodeParam_default("bah_verbosity_level", 2)
 if num_fisheye_transitions is not None:
