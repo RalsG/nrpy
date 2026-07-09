@@ -43,8 +43,21 @@ def register_CFunction_diagnostics() -> Union[None, pcg.NRPyEnv_type]:
         is_commondata=True,
     )
 
-    includes = ["BHaH_defines.h", "BHaH_function_prototypes.h"]
+    includes = ["BHaH_defines.h", "BHaH_function_prototypes.h", "sys/time.h"]
     prefunc = r"""
+/**
+ * Calculates the time difference in seconds between two `struct timeval` instances.
+ *
+ * @param start The starting `struct timeval`.
+ * @param end The ending `struct timeval`.
+ * @return The time difference in seconds as a REAL.
+ */
+static REAL diagnostics_timeval_to_seconds(struct timeval start, struct timeval end) {
+  const REAL start_seconds = start.tv_sec + start.tv_usec / 1.0e6;
+  const REAL end_seconds = end.tv_sec + end.tv_usec / 1.0e6;
+  return end_seconds - start_seconds;
+} // END FUNCTION: diagnostics_timeval_to_seconds
+
 /**
  * Displays spin values based on provided circumference ratio comparisons.
  *
@@ -181,9 +194,15 @@ calculations, norm evaluations, and detailed final iteration analyses.
         return;
 
       if (commondata->bhahaha_params_and_data->enable_spectre_spin_diagnostic) {
+        struct timeval spectre_spin_start_time, spectre_spin_end_time;
+        gettimeofday(&spectre_spin_start_time, NULL);
         const int spin_rc = bah_diagnostics_spectre_spin(commondata, griddata);
+        gettimeofday(&spectre_spin_end_time, NULL);
+        bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
+        printf("NRPy_BHaHAHA SpECTRE spin diagnostic elapsed time (Iter %d, H%d): %.6f s\n",
+               commondata->bhahaha_params_and_data->iteration_external_input, commondata->bhahaha_params_and_data->which_horizon,
+               diagnostics_timeval_to_seconds(spectre_spin_start_time, spectre_spin_end_time));
         if (spin_rc != BHAHAHA_SUCCESS) {
-          bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
           bhahaha_diags->spin_chi_x_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
           bhahaha_diags->spin_chi_y_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
           bhahaha_diags->spin_chi_z_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;

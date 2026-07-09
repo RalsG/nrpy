@@ -789,6 +789,32 @@ static void spectre_spin_seed_coordinate_reduced(const int N, const int Nred, co
 } // END FUNCTION: spectre_spin_seed_coordinate_reduced
 
 /**
+ * Seed reduced-space eigenvectors from saved full-surface scalar modes.
+ *
+ * @param N Number of full-space grid points.
+ * @param Nred Number of reduced-space grid points.
+ * @param[in] red_to_full Map from reduced-space indices to full-space indices.
+ * @param[in] mu Surface quadrature weights.
+ * @param area Surface area.
+ * @param[in] saved_modes Previously normalized full-surface scalar modes.
+ * @param[out] evecs_red Initial reduced-space eigenvector guesses.
+ */
+static void spectre_spin_seed_saved_modes_reduced(const int N, const int Nred, const int *restrict red_to_full, const REAL *restrict mu,
+                                                  const REAL area, const REAL *restrict saved_modes, double *restrict evecs_red) {
+  for (int mode = 0; mode < 3; mode++) {
+    REAL mean = 0.0;
+    for (int p = 0; p < N; p++)
+      mean += mu[p] * saved_modes[(size_t)mode * (size_t)N + p];
+    mean /= area;
+
+    for (int r = 0; r < Nred; r++) {
+      const int full = red_to_full[r];
+      evecs_red[(size_t)mode * (size_t)Nred + r] = (double)(saved_modes[(size_t)mode * (size_t)N + full] - mean);
+    } // END LOOP: for r over reduced-space grid points
+  } // END LOOP: for mode over saved seed modes
+} // END FUNCTION: spectre_spin_seed_saved_modes_reduced
+
+/**
  * Expand a reduced mean-zero vector into full-space coordinates.
  *
  * @param[in] ctx PRIMME matrix-vector context.
@@ -1195,6 +1221,7 @@ static int spectre_spin_procrustes(const REAL C[3][3], REAL O[3][3]) {
 static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commondata, griddata_struct *restrict griddata,
                                                const REAL *restrict auxevol_gfs, REAL *restrict spectre_spin_gfs) {
   const int grid = 0;
+  bhahaha_params_and_data_struct *restrict horizon_params = commondata->bhahaha_params_and_data;
   const params_struct *restrict params = &griddata[grid].params;
   const REAL *restrict in_gfs = griddata[grid].gridfuncs.y_n_gfs;
   REAL *restrict xx[3];
@@ -1230,6 +1257,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   const int Nred = N - 1;
   if (Nred < 3)
     return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+  int have_saved_seed = horizon_params != NULL && horizon_params->spectre_spin_akv_seed_valid &&
+                        horizon_params->spectre_spin_akv_seed_Ntheta == Ntheta && horizon_params->spectre_spin_akv_seed_Nphi == Nphi &&
+                        horizon_params->spectre_spin_akv_modes_m1 != NULL;
 
   const REAL *restrict weights;
   int weight_stencil_size;
@@ -1371,6 +1401,13 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   }
   for (int a = 0; a < 3; a++)
     x_centroid[a] /= area;
+
+  if (have_saved_seed) {
+    for (int p = 0; have_saved_seed && p < 3 * N; p++)
+      have_saved_seed &= isfinite(horizon_params->spectre_spin_akv_modes_m1[p]);
+    if (!have_saved_seed)
+      horizon_params->spectre_spin_akv_seed_valid = 0;
+  } // END IF: check saved SpECTRE AKV seed data
 
   for (int p = 0, r = 0; p < N; p++) {
     full_to_red[p] = -1;
@@ -1569,13 +1606,12 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.nLocal = Nred;
   primme.numEvals = 3;
 
-  
   // Target the smallest-magnitude eigenvalues near zero.
   static double target_shift = 0.0;
   primme.target = primme_closest_abs;
   primme.numTargetShifts = 1;
   primme.targetShifts = &target_shift;
-  
+
   primme.matrixMatvec = spectre_spin_primme_K_matvec;
   primme.massMatrixMatvec = spectre_spin_primme_M_matvec;
   primme.matrixMatvec_type = primme_op_double;
@@ -1593,11 +1629,17 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.maxBasisSize = 60;
   primme.minRestartSize = 20;
   primme.maxBlockSize = 4;
-  spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);
+  if (have_saved_seed) {
+    spectre_spin_seed_saved_modes_reduced(N, Nred, red_to_full, mu, area, horizon_params->spectre_spin_akv_modes_m1, evecs_red);
+  } else {
+    spectre_spin_seed_coordinate_reduced(N, Nred, red_to_full, x_ref, x_centroid, evecs_red);
+  } // END IF: saved SpECTRE AKV modes are available
 
   const int primme_status = dprimme(evals, evecs_red, resnorms, &primme);
   primme_free(&primme);
   if (primme_status != 0) {
+    if (horizon_params != NULL)
+      horizon_params->spectre_spin_akv_seed_valid = 0;
     spectre_spin_csr_free(&K_csr);
     spectre_spin_csr_free(&M_csr);
     free(full_x);
@@ -1620,6 +1662,8 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   }
   for (int a = 0; a < 3; a++) {
     if (!isfinite(evals[a]) || !isfinite(resnorms[a])) {
+      if (horizon_params != NULL)
+        horizon_params->spectre_spin_akv_seed_valid = 0;
       spectre_spin_csr_free(&K_csr);
       spectre_spin_csr_free(&M_csr);
       free(full_x);
@@ -1664,6 +1708,8 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   REAL O[3][3];
   status = spectre_spin_procrustes(C, O);
   if (status != BHAHAHA_SUCCESS) {
+    if (horizon_params != NULL)
+      horizon_params->spectre_spin_akv_seed_valid = 0;
     spectre_spin_csr_free(&K_csr);
     spectre_spin_csr_free(&M_csr);
     free(full_x);
@@ -1747,7 +1793,15 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     }
     if (finite_error)
       status = DIAG_SPECTRE_SPIN_POTENTIAL_NORMALIZATION_ERROR;
+    if (status == BHAHAHA_SUCCESS && horizon_params != NULL && horizon_params->spectre_spin_akv_modes_m1 != NULL) {
+      memcpy(horizon_params->spectre_spin_akv_modes_m1, modes, (size_t)3 * (size_t)N * sizeof(REAL));
+      horizon_params->spectre_spin_akv_seed_Ntheta = Ntheta;
+      horizon_params->spectre_spin_akv_seed_Nphi = Nphi;
+      horizon_params->spectre_spin_akv_seed_valid = 1;
+    } // END IF: final SpECTRE AKV modes are ready for reuse
   }
+  if (status != BHAHAHA_SUCCESS && horizon_params != NULL)
+    horizon_params->spectre_spin_akv_seed_valid = 0;
 
   spectre_spin_csr_free(&K_csr);
   spectre_spin_csr_free(&M_csr);
