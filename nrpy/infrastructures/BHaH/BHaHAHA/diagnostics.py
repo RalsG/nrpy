@@ -71,7 +71,7 @@ static void display_spin(const char *spin_label, const double spin_from_ratio1, 
 } // END FUNCTION: display_spin
 
 /**
- * Displays the SpECTRE dimensionless spin vector.
+ * Displays both AKV dimensionless spin vectors.
  *
  * This helper function prints the dimensionless spin chi components computed by
  * the SpECTRE spin diagnostic. If the diagnostic did not produce valid spin
@@ -80,8 +80,13 @@ static void display_spin(const char *spin_label, const double spin_from_ratio1, 
  * @param spin_chi_x_spectre The x component of the SpECTRE dimensionless spin chi.
  * @param spin_chi_y_spectre The y component of the SpECTRE dimensionless spin chi.
  * @param spin_chi_z_spectre The z component of the SpECTRE dimensionless spin chi.
+ * @param spin_chi_x_gram_schmidt The x component from Gram-Schmidt modes.
+ * @param spin_chi_y_gram_schmidt The y component from Gram-Schmidt modes.
+ * @param spin_chi_z_gram_schmidt The z component from Gram-Schmidt modes.
  */
-static void display_spectre_spin(const double spin_chi_x_spectre, const double spin_chi_y_spectre, const double spin_chi_z_spectre) {
+static void display_spectre_spin(const double spin_chi_x_spectre, const double spin_chi_y_spectre, const double spin_chi_z_spectre,
+                                 const double spin_chi_x_gram_schmidt, const double spin_chi_y_gram_schmidt,
+                                 const double spin_chi_z_gram_schmidt) {
   // Spin values of BHAHAHA_DIAGNOSTIC_UNAVAILABLE indicate that the diagnostic failed.
   if (spin_chi_x_spectre == BHAHAHA_DIAGNOSTIC_UNAVAILABLE || spin_chi_y_spectre == BHAHAHA_DIAGNOSTIC_UNAVAILABLE ||
       spin_chi_z_spectre == BHAHAHA_DIAGNOSTIC_UNAVAILABLE) {
@@ -90,6 +95,13 @@ static void display_spectre_spin(const double spin_chi_x_spectre, const double s
     printf("#spin_chi_spectre = (%.4g, %.4g, %.4g) based on SpECTRE spin diagnostic.\n", spin_chi_x_spectre, spin_chi_y_spectre,
            spin_chi_z_spectre);
   } // END IF: SpECTRE spin diagnostic produced valid values
+  if (spin_chi_x_gram_schmidt == BHAHAHA_DIAGNOSTIC_UNAVAILABLE || spin_chi_y_gram_schmidt == BHAHAHA_DIAGNOSTIC_UNAVAILABLE ||
+      spin_chi_z_gram_schmidt == BHAHAHA_DIAGNOSTIC_UNAVAILABLE) {
+    printf("#spin_chi_gram_schmidt = (    N/A    ,     N/A    ,     N/A    ) based on Gram-Schmidt-normalized AKV modes.\n");
+  } else {
+    printf("#spin_chi_gram_schmidt = (%.4g, %.4g, %.4g) based on Gram-Schmidt-normalized AKV modes.\n", spin_chi_x_gram_schmidt,
+           spin_chi_y_gram_schmidt, spin_chi_z_gram_schmidt);
+  } // END IF: Gram-Schmidt comparison produced valid values
 } // END FUNCTION: display_spectre_spin
 """
     desc = """Performs apparent horizon diagnostics for BHaHAHA.
@@ -197,6 +209,9 @@ calculations, norm evaluations, and detailed final iteration analyses.
           bhahaha_diags->spin_chi_x_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
           bhahaha_diags->spin_chi_y_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
           bhahaha_diags->spin_chi_z_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+          bhahaha_diags->spin_chi_x_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+          bhahaha_diags->spin_chi_y_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+          bhahaha_diags->spin_chi_z_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
           if (commondata->bhahaha_params_and_data->verbosity_level > 0) {
             fprintf(stderr, "WARNING: SpECTRE spin diagnostic failed with code %d; continuing without spin output.\n", spin_rc);
           }
@@ -265,7 +280,9 @@ calculations, norm evaluations, and detailed final iteration analyses.
                        "xz/xy", "yz/xy");
 
           // Display SpECTRE spin values
-          display_spectre_spin(bhahaha_diags->spin_chi_x_spectre, bhahaha_diags->spin_chi_y_spectre, bhahaha_diags->spin_chi_z_spectre);
+          display_spectre_spin(bhahaha_diags->spin_chi_x_spectre, bhahaha_diags->spin_chi_y_spectre, bhahaha_diags->spin_chi_z_spectre,
+                               bhahaha_diags->spin_chi_x_gram_schmidt, bhahaha_diags->spin_chi_y_gram_schmidt,
+                               bhahaha_diags->spin_chi_z_gram_schmidt);
         } // END IF: verbosity level > 0
       } // END BLOCK: compute final diagnostics and update stored horizon history
     } // END IF: final iteration

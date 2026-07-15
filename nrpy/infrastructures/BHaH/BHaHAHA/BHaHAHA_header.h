@@ -244,6 +244,10 @@ typedef struct {
   REAL spin_chi_x_spectre;
   REAL spin_chi_y_spectre;
   REAL spin_chi_z_spectre;
+  // Comparison using Procrustes alignment followed by L2 Gram-Schmidt.
+  REAL spin_chi_x_gram_schmidt;
+  REAL spin_chi_y_gram_schmidt;
+  REAL spin_chi_z_gram_schmidt;
 
 } bhahaha_diagnostics_struct;
 
@@ -251,6 +255,9 @@ static inline void bah_initialize_diagnostics_struct(bhahaha_diagnostics_struct 
   diags->spin_chi_x_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
   diags->spin_chi_y_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
   diags->spin_chi_z_spectre = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+  diags->spin_chi_x_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+  diags->spin_chi_y_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
+  diags->spin_chi_z_gram_schmidt = BHAHAHA_DIAGNOSTIC_UNAVAILABLE;
 } // END FUNCTION: bah_initialize_diagnostics_struct
 
 //==================
