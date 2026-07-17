@@ -108,9 +108,9 @@ Operations performed:
     fprintf(fileptr, "# column 22 = Dimensionless spin x-component (based on spin function Omega)\n");
     fprintf(fileptr, "# column 23 = Dimensionless spin y-component (based on spin function Omega)\n");
     fprintf(fileptr, "# column 24 = Dimensionless spin z-component (based on spin function Omega)\n");
-    fprintf(fileptr, "# column 25 = Dimensionless spin x-component (Gram-Schmidt AKV comparison)\n");
-    fprintf(fileptr, "# column 26 = Dimensionless spin y-component (Gram-Schmidt AKV comparison)\n");
-    fprintf(fileptr, "# column 27 = Dimensionless spin z-component (Gram-Schmidt AKV comparison)\n");
+    fprintf(fileptr, "# column 25 = Dimensionless spin x-component (direct Gram-matrix AKV correction)\n");
+    fprintf(fileptr, "# column 26 = Dimensionless spin y-component (direct Gram-matrix AKV correction)\n");
+    fprintf(fileptr, "# column 27 = Dimensionless spin z-component (direct Gram-matrix AKV correction)\n");
     fflush(fileptr);
   } // END IF: file size zero -> need to write header
 
@@ -127,9 +127,9 @@ Operations performed:
   const REAL spin_chi_x_spectre = (diags->spin_chi_x_spectre != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_x_spectre : NAN;
   const REAL spin_chi_y_spectre = (diags->spin_chi_y_spectre != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_y_spectre : NAN;
   const REAL spin_chi_z_spectre = (diags->spin_chi_z_spectre != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_z_spectre : NAN;
-  const REAL spin_chi_x_gram_schmidt = (diags->spin_chi_x_gram_schmidt != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_x_gram_schmidt : NAN;
-  const REAL spin_chi_y_gram_schmidt = (diags->spin_chi_y_gram_schmidt != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_y_gram_schmidt : NAN;
-  const REAL spin_chi_z_gram_schmidt = (diags->spin_chi_z_gram_schmidt != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_z_gram_schmidt : NAN;
+  const REAL spin_chi_x_gram_matrix = (diags->spin_chi_x_gram_matrix != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_x_gram_matrix : NAN;
+  const REAL spin_chi_y_gram_matrix = (diags->spin_chi_y_gram_matrix != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_y_gram_matrix : NAN;
+  const REAL spin_chi_z_gram_matrix = (diags->spin_chi_z_gram_matrix != BHAHAHA_DIAGNOSTIC_UNAVAILABLE) ? diags->spin_chi_z_gram_matrix : NAN;
 
   // Output diagnostic metrics to the diagnostics file.
   fprintf(fileptr,
@@ -160,9 +160,9 @@ Operations performed:
           spin_chi_x_spectre,                                // (22) Dimensionless spin x (Omega)
           spin_chi_y_spectre,                                // (23) Dimensionless spin y (Omega)
           spin_chi_z_spectre,                                // (24) Dimensionless spin z (Omega)
-          spin_chi_x_gram_schmidt,                            // (25) Dimensionless spin x (Gram-Schmidt)
-          spin_chi_y_gram_schmidt,                            // (26) Dimensionless spin y (Gram-Schmidt)
-          spin_chi_z_gram_schmidt                             // (27) Dimensionless spin z (Gram-Schmidt)
+          spin_chi_x_gram_matrix,                             // (25) Dimensionless spin x (Gram matrix)
+          spin_chi_y_gram_matrix,                             // (26) Dimensionless spin y (Gram matrix)
+          spin_chi_z_gram_matrix                              // (27) Dimensionless spin z (Gram matrix)
   );
 
   fflush(fileptr);
