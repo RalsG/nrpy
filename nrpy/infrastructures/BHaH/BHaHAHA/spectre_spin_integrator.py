@@ -2137,6 +2137,21 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   } // END ELSE: saved SpECTRE AKV modes aren't available
 
   const int primme_status = dprimme(evals, evecs_red, resnorms, &primme);
+  
+  ////////// temporary print
+  printf(
+    "AKV PRIMME scales: eps=%+.17e aNorm=%+.17e "
+    "BNorm=%+.17e invBNorm=%+.17e threshold=%+.17e "
+    "converged=%d lockingIssue=%lld\n",
+    primme.eps,
+    primme.aNorm,
+    primme.BNorm,
+    primme.invBNorm,
+    primme.eps * primme.aNorm * primme.invBNorm,
+    primme.initSize,
+    (long long)primme.stats.lockingIssue);
+  /////////// temporary print
+
   primme_free(&primme);
   if (primme_status != 0) {
     if (horizon_params != NULL)
