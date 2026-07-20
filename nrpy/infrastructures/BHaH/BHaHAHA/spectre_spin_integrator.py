@@ -266,12 +266,17 @@ PRIMME, or normalization diagnostic error code.
             for name in grid_parameter_names
             if name in par.glb_code_params_dict
         ]
+        spin_potential_grid_parameter_symbols = [
+            par.glb_code_params_dict[name].symbol
+            for name in grid_parameter_names
+            if name not in ("invdxx1", "invdxx2") and name in par.glb_code_params_dict
+        ]
         local_definition_blocks = {}
         for block_name, expressions in (
             (
                 "spin_potential",
                 [
-                    *grid_parameter_symbols,
+                    *spin_potential_grid_parameter_symbols,
                 ],
             ),
             (
@@ -1521,9 +1526,22 @@ static int spectre_spin_procrustes(const REAL C[3][3], REAL O[3][3]) {
  * independently normalized with the scalar-potential convention:
  * int z_alpha^2 dA = A^3 / (48*pi^2).
  * Procrustes-aligned copies are used only as seeds for the next eigensolve.
+ *
+ * @param[in,out] commondata Global state receiving saved AKV modes.
+ * @param[in] griddata Grid and horizon-field data.
+ * @param[in] auxevol_gfs Auxiliary evolution gridfunctions.
+ * @param[in,out] spectre_spin_gfs Spin-diagnostic scratch gridfunctions.
+ * @param[out] normalized_gram Normalized scalar-potential Gram matrix.
+ * @return BHAHAHA_SUCCESS, or an allocation, geometry, PRIMME, or
+ * normalization error code.
  */
 static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commondata, griddata_struct *restrict griddata,
-                                               const REAL *restrict auxevol_gfs, REAL *restrict spectre_spin_gfs) {
+                                               const REAL *restrict auxevol_gfs, REAL *restrict spectre_spin_gfs,
+                                               REAL normalized_gram[3][3]) {
+  for (int a = 0; a < 3; a++)
+    for (int b = 0; b < 3; b++)
+      normalized_gram[a][b] = 0.0;
+
   const int grid = 0;
   bhahaha_params_and_data_struct *restrict horizon_params = commondata->bhahaha_params_and_data;
   const params_struct *restrict params = &griddata[grid].params;
@@ -2110,7 +2128,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.initSize = 3;
   primme.maxBasisSize = 60;
   primme.minRestartSize = 30;
-  primme.maxBlockSize = 4;
+  primme.maxBlockSize = 1;
   if (have_saved_seed) {
     spectre_spin_seed_saved_modes_reduced(N, Nred, red_to_full, mu, nyq, area, horizon_params->spectre_spin_akv_modes_m1, full_y, evecs_red);
   } // END IF: saved SpECTRE AKV modes are available
@@ -2246,6 +2264,24 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     } // END IF: mean and Nyquist removal succeeded
   } // END LOOP: for mode over independently normalized AKV eigenvectors
 
+  if (status == BHAHAHA_SUCCESS) {
+    for (int a = 0; a < 3; a++) {
+      for (int b = 0; b < 3; b++) {
+        REAL overlap = 0.0;
+        for (int p = 0; p < N; p++)
+          overlap +=
+              mu[p] * modes[(size_t)a * (size_t)N + p] * modes[(size_t)b * (size_t)N + p];
+        normalized_gram[a][b] = overlap / target_potential_norm;
+        if (!isfinite(normalized_gram[a][b])) {
+          status = DIAG_SPECTRE_SPIN_POTENTIAL_NORMALIZATION_ERROR;
+          break;
+        } // END IF: normalized scalar-potential Gram entry is non-finite
+      } // END LOOP: for b over normalized scalar-potential Gram columns
+      if (status != BHAHAHA_SUCCESS)
+        break;
+    } // END LOOP: for a over normalized scalar-potential Gram rows
+  } // END IF: all independently normalized AKV modes are available
+
   static const char *const normalized_constraint_labels[3] = {
       "normalized_mode0", "normalized_mode1", "normalized_mode2"};
   if (horizon_params != NULL && horizon_params->verbosity_level >= 2)
@@ -2258,18 +2294,15 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       spectre_spin_csr_matvec(&M_csr, &modes[(size_t)b * (size_t)N], full_y);
 
       for (int a = 0; a < 3; a++) {
-        REAL Gab = 0.0;
         REAL Mab = 0.0;
 
         for (int p = 0; p < N; p++) {
           const REAL za = modes[(size_t)a * (size_t)N + p];
-          const REAL zb = modes[(size_t)b * (size_t)N + p];
-          Gab += mu[p] * za * zb;
           Mab += za * full_y[p];
-        } // END LOOP: for p over horizon points in normalized-mode products
+        } // END LOOP: for p over horizon points in mass-matrix products
 
         printf("AKV mode Gram: a=%d b=%d L2/target=%+.17e M=%+.17e\n",
-               a, b, Gab / target_potential_norm, Mab);
+               a, b, normalized_gram[a][b], Mab);
       } // END LOOP: for a over normalized AKV modes
     } // END LOOP: for b over mass-matrix AKV mode products
 
@@ -2405,14 +2438,13 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   REAL O0_sum = 0.0;
   REAL XOU_sum[3] = {0.0, 0.0, 0.0};
   REAL ZOU_sum[3] = {0.0, 0.0, 0.0};
-  REAL gram_sum[3][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
   REAL Oabs_sum = 0.0;
 
-  // Set integration weights (e.g., for Simpson's rule).
-  // This external function provides the 1D weights array.
-  const REAL *restrict weights;
-  int weight_stencil_size;
-  bah_diagnostics_integration_weights(Nxx1, Nxx2, &weights, &weight_stencil_size);
+  // Match the AKV measure: corrected cell-centered theta quadrature and a
+  // uniform periodic-phi weight.
+  const REAL *restrict theta_weights;
+  int theta_weight_stencil_size;
+  bah_diagnostics_integration_weights(Nxx1, Nxx1, &theta_weights, &theta_weight_stencil_size);
 
   // Precompute SE_qDD and SE_XD only where generated finite-difference
   // stencils are valid.
@@ -2461,8 +2493,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     }} // END IF: ghost-filled precompute scratch fields contain non-finite values
   }} // END BLOCK: fill SE_qDD and SE_XD ghost zones before differentiating them
 
+  REAL G[3][3];
   const int spin_potential_status =
-      bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs);
+      bah_compute_spectre_spin_potentials(commondata, griddata, auxevol_gfs, spectre_spin_gfs, G);
   if (spin_potential_status != BHAHAHA_SUCCESS) {{
     free(spectre_spin_gfs);
     return spin_potential_status;
@@ -2490,16 +2523,16 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     REAL O0_sum_private = 0.0;
     REAL XOU_sum_private[3] = {{0.0, 0.0, 0.0}};
     REAL ZOU_sum_private[3] = {{0.0, 0.0, 0.0}};
-    REAL gram_sum_private[3][3] = {{{{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}, {{0.0, 0.0, 0.0}}}};
     REAL Oabs_sum_private = 0.0;
 
 #pragma omp for
     for (int i2 = NGHOSTS; i2 < NGHOSTS + Nxx2; i2++) {{
-        const REAL weight2 = weights[(i2 - NGHOSTS) % weight_stencil_size];
+        const REAL weight2 = 1.0;
+        (void)weight2;
         const REAL xx2 = xx[2][i2];
         (void)xx2;
         for (int i1 = NGHOSTS; i1 < NGHOSTS + Nxx1; i1++) {{
-            const REAL weight1 = weights[(i1 - NGHOSTS) % weight_stencil_size];
+            const REAL weight1 = theta_weights[(i1 - NGHOSTS) % theta_weight_stencil_size];
             const REAL xx1 = xx[1][i1];
             (void)xx1;
             for (int i0 = NGHOSTS; i0 < NGHOSTS + Nxx0; i0++) {{
@@ -2516,7 +2549,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
 
         body += r"""
                 // The differential area element, excluding coordinate steps (dθ, dφ)
-                const REAL dA_unscaled = area_density * weight1 * weight2;
+                const REAL dA_unscaled = area_density * weight1;
 
                 // Accumulate into thread-private variables
                 A_sum_private += A_integrand * dA_unscaled;
@@ -2532,13 +2565,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
                 ZOU_sum_private[0] += ZOU0_integrand * dA_unscaled;
                 ZOU_sum_private[1] += ZOU1_integrand * dA_unscaled;
                 ZOU_sum_private[2] += ZOU2_integrand * dA_unscaled;
-                const REAL z_shared[3] = {
-                    spectre_spin_gfs[IDX4(ZU0GF, i0, i1, i2)],
-                    spectre_spin_gfs[IDX4(ZU1GF, i0, i1, i2)],
-                    spectre_spin_gfs[IDX4(ZU2GF, i0, i1, i2)]};
-                for (int a = 0; a < 3; a++)
-                    for (int b = 0; b < 3; b++)
-                        gram_sum_private[a][b] += z_shared[a] * z_shared[b] * dA_unscaled;
                 R0_sum_private   += R0_integrand * dA_unscaled;
                 O0_sum_private   += O0_integrand * dA_unscaled;
                 Oabs_sum_private += Oabs_integrand * dA_unscaled;
@@ -2555,9 +2581,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
             XRU_sum[i] += XRU_sum_private[i];
             XOU_sum[i] += XOU_sum_private[i];
             ZOU_sum[i] += ZOU_sum_private[i];
-            for (int j = 0; j < 3; j++)
-                gram_sum[i][j] += gram_sum_private[i][j];
-        } // END LOOP: for i over shared spin moments and Gram-matrix rows
+        } // END LOOP: for i over shared spin moments
         R0_sum   += R0_sum_private;
         O0_sum   += O0_sum_private;
         Oabs_sum += Oabs_sum_private;
@@ -2624,18 +2648,12 @@ if (!isfinite(normI) || !isfinite(Salpha_norm) || !isfinite(S)) {
 } // END IF: spin-vector normalization is invalid
 
 // Correct the shared spin-integral vector for its shared modes' L2(dA)
-// overlaps. The normalized Gram matrix is dimensionless and has unit diagonal.
-const REAL target_potential_norm = A * A * A / (48.0 * M_PI * M_PI);
-if (!(target_potential_norm > 0.0) || !isfinite(target_potential_norm)) {
-    free(spectre_spin_gfs);
-    return DIAG_SPECTRE_SPIN_POTENTIAL_NORMALIZATION_ERROR;
-} // END IF: Kerr target potential norm is invalid
-REAL G[3][3];
+// overlaps. The AKV solver returns this dimensionless normalized Gram matrix
+// using the same measure that independently normalizes the three modes.
 REAL gram_max_abs = 0.0;
 REAL gram_max_asymmetry = 0.0;
 for (int i = 0; i < 3; i++) {
     for (int j = 0; j < 3; j++) {
-        G[i][j] = gram_sum[i][j] * surface_weight / target_potential_norm;
         if (!isfinite(G[i][j])) {
             free(spectre_spin_gfs);
             return DIAG_SPECTRE_SPIN_POTENTIAL_NORMALIZATION_ERROR;
