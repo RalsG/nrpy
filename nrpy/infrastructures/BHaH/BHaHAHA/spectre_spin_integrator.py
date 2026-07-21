@@ -2140,14 +2140,21 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   
   ////////// temporary print
   printf(
-    "AKV PRIMME scales: eps=%+.17e aNorm=%+.17e "
-    "BNorm=%+.17e invBNorm=%+.17e threshold=%+.17e "
-    "converged=%d lockingIssue=%lld\n",
+    "AKV PRIMME scales: eps=%+.17e "
+    "aNorm=%+.17e BNorm=%+.17e invBNorm=%+.17e "
+    "estimateLargestSVal=%+.17e "
+    "estimateBNorm=%+.17e estimateInvBNorm=%+.17e "
+    "effective_threshold=%+.17e "
+    "maxConvTol=%+.17e converged=%d lockingIssue=%lld\n",
     primme.eps,
     primme.aNorm,
     primme.BNorm,
     primme.invBNorm,
-    primme.eps * primme.aNorm * primme.invBNorm,
+    primme.stats.estimateLargestSVal,
+    primme.stats.estimateBNorm,
+    primme.stats.estimateInvBNorm,
+    primme.eps * primme.stats.estimateLargestSVal,
+    primme.stats.maxConvTol,
     primme.initSize,
     (long long)primme.stats.lockingIssue);
   /////////// temporary print
