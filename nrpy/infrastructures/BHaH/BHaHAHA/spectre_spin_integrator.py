@@ -2115,9 +2115,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.ldevecs = Nred;
   primme.matrix = &ctx;
   primme.massMatrix = &ctx;
-  primme.eps = 1.0e-6;
-  primme.maxMatvecs = 50000;
-  primme.maxOuterIterations = 5000;
+  primme.eps = 1.0e-10;
+  primme.maxMatvecs = 200000;
+  primme.maxOuterIterations = 20000;
   if (horizon_params != NULL && horizon_params->verbosity_level >= 2)
     primme.printLevel = 3;
   else if (horizon_params != NULL && horizon_params->verbosity_level >= 1)
@@ -2126,8 +2126,8 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     primme.printLevel = 1;
   primme_set_method(PRIMME_DEFAULT_MIN_TIME, &primme);
   primme.initSize = 3;
-  primme.maxBasisSize = 60;
-  primme.minRestartSize = 30;
+  primme.maxBasisSize = 80;
+  primme.minRestartSize = 48;
   primme.maxBlockSize = 1;
   if (have_saved_seed) {
     spectre_spin_seed_saved_modes_reduced(N, Nred, red_to_full, mu, nyq, area, horizon_params->spectre_spin_akv_modes_m1, full_y, evecs_red);
