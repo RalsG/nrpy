@@ -2115,7 +2115,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.ldevecs = Nred;
   primme.matrix = &ctx;
   primme.massMatrix = &ctx;
-  primme.eps = 1.0e-10;
+  primme.eps = 1.0e-11;
   primme.maxMatvecs = 200000;
   primme.maxOuterIterations = 20000;
   if (horizon_params != NULL && horizon_params->verbosity_level >= 2)
