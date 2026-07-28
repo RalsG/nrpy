@@ -2128,7 +2128,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   primme.initSize = 3;
   primme.maxBasisSize = 80;
   primme.minRestartSize = 48;
-  primme.maxBlockSize = 1;
+  primme.maxBlockSize = 3;
   if (have_saved_seed) {
     spectre_spin_seed_saved_modes_reduced(N, Nred, red_to_full, mu, nyq, area, horizon_params->spectre_spin_akv_modes_m1, full_y, evecs_red);
   } // END IF: saved SpECTRE AKV modes are available
