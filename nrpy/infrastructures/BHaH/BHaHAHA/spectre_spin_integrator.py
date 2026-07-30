@@ -348,9 +348,7 @@ PRIMME, or normalization diagnostic error code.
         )
         max_row_nnz = 2 * fd_width**2 + 4 * fd_width
 
-        prefunc = (
-            APPLY_PARITY_BRANCHLESS_PREFUNC
-            + rf"""
+        prefunc = APPLY_PARITY_BRANCHLESS_PREFUNC + rf"""
 #define NUM_SPECTRE_SPIN_SCRATCH_GFS {len(_SPECTRE_SPIN_SCRATCH_GFS)}
 {scratch_gf_defines}
 
@@ -524,7 +522,6 @@ static int spectre_spin_check_finite_scratch_gfs(const REAL *restrict spectre_sp
   return BHAHAHA_SUCCESS;
 }} // END FUNCTION: spectre_spin_check_finite_scratch_gfs
 """
-        )
         prefunc += (
             r"""
 #include "akv_primme.h"
@@ -2389,9 +2386,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   free(aligned_modes);
   return status;
 } // END FUNCTION: bah_compute_spectre_spin_potentials
-""".replace(
-                "@FD_RADIUS@", str(fd_radius)
-            )
+""".replace("@FD_RADIUS@", str(fd_radius))
             .replace("@FD_WIDTH@", str(fd_width))
             .replace("@MAX_ROW_NNZ@", str(max_row_nnz))
             .replace("@FD_FIRST@", fd_first_coeffs)
