@@ -56,7 +56,7 @@ par.set_parval_from_str("parallelization", parallelization)
 par.set_parval_from_str("fp_type", fp_type)
 
 # Code-generation-time parameters:
-project_name = "spinning_blackhole"
+project_name = "spinning_blackhole2"
 CoordSystem = "SinhCylindrical"
 IDtype = "UIUCBlackHole"
 # IDtype = "OffsetKerrSchild"

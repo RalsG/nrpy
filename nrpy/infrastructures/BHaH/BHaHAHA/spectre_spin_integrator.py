@@ -526,6 +526,8 @@ static int spectre_spin_check_finite_scratch_gfs(const REAL *restrict spectre_sp
             r"""
 #include "akv_primme.h"
 #include <float.h>
+#include <limits.h>
+#include <stdint.h>
 #include <string.h>
 
 #ifndef PRIMME_VERSION_MAJOR
@@ -552,18 +554,16 @@ typedef struct {
 } spectre_spin_sparse_row_struct;
 
 typedef struct {
-  int row;
-  int col;
-  REAL val;
-} spectre_spin_triplet_struct;
+  int nnz;
+  int capacity;
+  spectre_spin_row_entry_struct *restrict slots;
+} spectre_spin_matrix_builder_row_struct;
 
 typedef struct {
   int rows;
   int cols;
-  int nnz;
-  int capacity;
-  spectre_spin_triplet_struct *restrict entries;
-} spectre_spin_triplet_builder_struct;
+  spectre_spin_matrix_builder_row_struct *restrict row_builders;
+} spectre_spin_matrix_builder_struct;
 
 typedef struct {
   int rows;
@@ -657,154 +657,285 @@ static int spectre_spin_row_add_scaled(spectre_spin_sparse_row_struct *restrict 
   return BHAHAHA_SUCCESS;
 } // END FUNCTION: spectre_spin_row_add_scaled
 
+static size_t spectre_spin_builder_hash_col(const int col, const int capacity) {
+  return ((size_t)(unsigned int)col * (size_t)UINT32_C(2654435761)) & ((size_t)capacity - 1);
+} // END FUNCTION: spectre_spin_builder_hash_col
+
 /**
- * Initialize a triplet sparse-matrix builder.
+ * Allocate or grow one row-local hash table and rehash its unique entries.
  *
- * @param[in,out] builder Triplet builder to initialize.
- * @param rows Number of matrix rows.
- * @param cols Number of matrix columns.
- * @param initial_capacity Requested initial entry capacity.
+ * The replacement is committed only after its allocation and rehash complete,
+ * so failure leaves the old row table intact. The caller supplies a power-of-two
+ * capacity, allowing probing to wrap with a mask.
+ *
+ * @param[in,out] builder Matrix builder owning the row and validation counters.
+ * @param[in,out] row_builder Row-local table to allocate or grow.
+ * @param new_capacity Requested power-of-two slot count.
  * @return BHAHAHA_SUCCESS, or an allocation error code.
  */
-static int spectre_spin_builder_init(spectre_spin_triplet_builder_struct *restrict builder, const int rows, const int cols,
-                                     const int initial_capacity) {
+static int spectre_spin_builder_rehash_row(spectre_spin_matrix_builder_struct *restrict builder,
+                                           spectre_spin_matrix_builder_row_struct *restrict row_builder,
+                                           const int new_capacity) {
+  (void)builder;
+  if (new_capacity <= 0 || (new_capacity & (new_capacity - 1)) != 0 ||
+      (size_t)new_capacity > SIZE_MAX / sizeof(spectre_spin_row_entry_struct))
+    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+
+  spectre_spin_row_entry_struct *restrict new_slots =
+      (spectre_spin_row_entry_struct *)malloc((size_t)new_capacity * sizeof(spectre_spin_row_entry_struct));
+  if (new_slots == NULL)
+    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+  for (int slot = 0; slot < new_capacity; slot++) {
+    new_slots[slot].col = -1;
+    new_slots[slot].val = 0.0;
+  } // END LOOP: for slot over the new row-local hash table
+
+  for (int old_slot = 0; old_slot < row_builder->capacity; old_slot++) {
+    if (row_builder->slots[old_slot].col >= 0) {
+      size_t slot = spectre_spin_builder_hash_col(row_builder->slots[old_slot].col, new_capacity);
+      while (new_slots[slot].col >= 0)
+        slot = (slot + 1) & ((size_t)new_capacity - 1);
+      new_slots[slot] = row_builder->slots[old_slot];
+    } // END IF: old row-local slot is occupied
+  } // END LOOP: for old_slot over the old row-local hash table
+
+  free(row_builder->slots);
+  row_builder->slots = new_slots;
+  row_builder->capacity = new_capacity;
+  return BHAHAHA_SUCCESS;
+} // END FUNCTION: spectre_spin_builder_rehash_row
+
+/**
+ * Initialize a row-coalescing sparse-matrix builder.
+ *
+ * Only zeroed per-row metadata is allocated here. Individual row hash tables
+ * are allocated lazily when their first unique entry arrives.
+ *
+ * @param[in,out] builder Matrix builder to initialize.
+ * @param rows Number of matrix rows.
+ * @param cols Number of matrix columns.
+ * @return BHAHAHA_SUCCESS, or an allocation/geometry error code.
+ */
+static int spectre_spin_builder_init(spectre_spin_matrix_builder_struct *restrict builder, const int rows, const int cols) {
+  *builder = (spectre_spin_matrix_builder_struct){0};
+  if (rows <= 0 || cols <= 0)
+    return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+  if ((size_t)rows > SIZE_MAX / sizeof(spectre_spin_matrix_builder_row_struct))
+    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
   builder->rows = rows;
   builder->cols = cols;
-  builder->nnz = 0;
-  builder->capacity = initial_capacity > 0 ? initial_capacity : 1024;
-  builder->entries = (spectre_spin_triplet_struct *)malloc((size_t)builder->capacity * sizeof(spectre_spin_triplet_struct));
-  return builder->entries == NULL ? DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR : BHAHAHA_SUCCESS;
+  builder->row_builders =
+      (spectre_spin_matrix_builder_row_struct *)calloc((size_t)rows, sizeof(spectre_spin_matrix_builder_row_struct));
+  return builder->row_builders == NULL ? DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR : BHAHAHA_SUCCESS;
 } // END FUNCTION: spectre_spin_builder_init
 
 /**
- * Free storage owned by a triplet sparse-matrix builder.
+ * Free all row-local storage owned by a sparse-matrix builder.
  *
- * @param[in,out] builder Triplet builder to release.
+ * @param[in,out] builder Matrix builder to release. A zero or partially
+ * initialized builder is accepted.
  */
-static void spectre_spin_builder_free(spectre_spin_triplet_builder_struct *restrict builder) {
-  free(builder->entries);
-  builder->entries = NULL;
-  builder->nnz = 0;
-  builder->capacity = 0;
+static void spectre_spin_builder_free(spectre_spin_matrix_builder_struct *restrict builder) {
+  if (builder->row_builders != NULL) {
+    for (int row = 0; row < builder->rows; row++)
+      free(builder->row_builders[row].slots);
+  } // END IF: top-level row metadata is allocated
+  free(builder->row_builders);
+  *builder = (spectre_spin_matrix_builder_struct){0};
 } // END FUNCTION: spectre_spin_builder_free
 
 /**
- * Append one finite matrix entry to a triplet sparse-matrix builder.
+ * Add or accumulate one finite matrix entry in a row-local hash table.
  *
- * @param[in,out] builder Triplet builder being assembled.
+ * Existing keys are updated in place. A new key grows only its target row when
+ * insertion would exceed a one-half load factor. Exact-zero sums remain
+ * occupied during assembly and are pruned during CSR finalization.
+ *
+ * @param[in,out] builder Matrix builder being assembled.
  * @param row Row index for the entry.
  * @param col Column index for the entry.
- * @param val Entry value.
+ * @param val Entry value to accumulate.
  * @return BHAHAHA_SUCCESS, or an allocation/geometry error code.
  */
-static int spectre_spin_builder_add(spectre_spin_triplet_builder_struct *restrict builder, const int row, const int col, const REAL val) {
+static int spectre_spin_builder_add(spectre_spin_matrix_builder_struct *restrict builder, const int row, const int col, const REAL val) {
   if (val == 0.0)
     return BHAHAHA_SUCCESS;
   if (row < 0 || row >= builder->rows || col < 0 || col >= builder->cols || !isfinite(val))
     return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
-  if (builder->nnz == builder->capacity) {
-    const int new_capacity = builder->capacity < 1048576 ? 2 * builder->capacity : builder->capacity + 1048576;
-    spectre_spin_triplet_struct *restrict new_entries =
-        (spectre_spin_triplet_struct *)realloc(builder->entries, (size_t)new_capacity * sizeof(spectre_spin_triplet_struct));
-    if (new_entries == NULL)
+
+  spectre_spin_matrix_builder_row_struct *restrict row_builder = &builder->row_builders[row];
+  if (row_builder->capacity == 0) {
+    const int status = spectre_spin_builder_rehash_row(builder, row_builder, 8);
+    if (status != BHAHAHA_SUCCESS)
+      return status;
+  } // END IF: target row has no hash table yet
+
+  size_t slot = spectre_spin_builder_hash_col(col, row_builder->capacity);
+  while (row_builder->slots[slot].col >= 0 && row_builder->slots[slot].col != col)
+    slot = (slot + 1) & ((size_t)row_builder->capacity - 1);
+  if (row_builder->slots[slot].col == col) {
+    const REAL sum = row_builder->slots[slot].val + val;
+    if (!isfinite(sum))
+      return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+    row_builder->slots[slot].val = sum;
+    return BHAHAHA_SUCCESS;
+  } // END IF: target matrix key is already occupied
+
+  if (row_builder->nnz >= row_builder->capacity / 2) {
+    if (row_builder->capacity > INT_MAX / 2)
       return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
-    builder->entries = new_entries;
-    builder->capacity = new_capacity;
-  } // END IF: triplet builder storage is full
-  builder->entries[builder->nnz].row = row;
-  builder->entries[builder->nnz].col = col;
-  builder->entries[builder->nnz].val = val;
-  builder->nnz++;
+    const int status = spectre_spin_builder_rehash_row(builder, row_builder, 2 * row_builder->capacity);
+    if (status != BHAHAHA_SUCCESS)
+      return status;
+    slot = spectre_spin_builder_hash_col(col, row_builder->capacity);
+    while (row_builder->slots[slot].col >= 0)
+      slot = (slot + 1) & ((size_t)row_builder->capacity - 1);
+  } // END IF: inserting a unique key requires row-local growth
+
+  row_builder->slots[slot].col = col;
+  row_builder->slots[slot].val = val;
+  row_builder->nnz++;
   return BHAHAHA_SUCCESS;
 } // END FUNCTION: spectre_spin_builder_add
 
-static int spectre_spin_triplet_cmp(const void *a, const void *b) {
-  const spectre_spin_triplet_struct *ta = (const spectre_spin_triplet_struct *)a;
-  const spectre_spin_triplet_struct *tb = (const spectre_spin_triplet_struct *)b;
-  if (ta->row != tb->row)
-    return ta->row < tb->row ? -1 : 1;
-  if (ta->col != tb->col)
-    return ta->col < tb->col ? -1 : 1;
-  return 0;
-} // END FUNCTION: spectre_spin_triplet_cmp
+static int spectre_spin_matrix_entry_cmp(const void *a, const void *b) {
+  const spectre_spin_row_entry_struct *entry_a = (const spectre_spin_row_entry_struct *)a;
+  const spectre_spin_row_entry_struct *entry_b = (const spectre_spin_row_entry_struct *)b;
+  if (entry_a->col == entry_b->col)
+    return 0;
+  return entry_a->col < entry_b->col ? -1 : 1;
+} // END FUNCTION: spectre_spin_matrix_entry_cmp
 
 /**
- * Convert assembled triplets to compressed sparse row storage.
+ * Finalize coalesced row hash tables directly into compressed sparse rows.
  *
- * Duplicate triplet entries are sorted and summed before the CSR arrays are
- * allocated and populated. Exact zeros are discarded; non-finite sums are
- * reported as assembly defects.
+ * The first pass counts finite nonzero entries and constructs row pointers.
+ * Each row is then collected into one reusable scratch array, sorted by column,
+ * checked for uniqueness, and copied into its final CSR segment.
  *
- * @param[in,out] builder Triplet builder containing entries to compress.
- * @param[in,out] csr Output CSR matrix.
+ * @param[in] builder Row-coalescing builder to finalize.
+ * @param[in,out] csr Output CSR matrix, initialized to safely destructible state.
  * @return BHAHAHA_SUCCESS, or an allocation/geometry error code.
  */
-static int spectre_spin_builder_to_csr(spectre_spin_triplet_builder_struct *restrict builder, spectre_spin_csr_matrix_struct *restrict csr) {
+static int spectre_spin_builder_to_csr(const spectre_spin_matrix_builder_struct *restrict builder,
+                                       spectre_spin_csr_matrix_struct *restrict csr) {
+  *csr = (spectre_spin_csr_matrix_struct){0};
   csr->rows = builder->rows;
   csr->cols = builder->cols;
-  csr->nnz = 0;
-  csr->rowptr = NULL;
-  csr->colind = NULL;
-  csr->vals = NULL;
+  if ((size_t)builder->rows + 1 > SIZE_MAX / sizeof(int))
+    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+  csr->rowptr = (int *)malloc(((size_t)builder->rows + 1) * sizeof(int));
+  if (csr->rowptr == NULL)
+    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
 
-  qsort(builder->entries, (size_t)builder->nnz, sizeof(spectre_spin_triplet_struct), spectre_spin_triplet_cmp);
+  int total_nnz = 0;
+  int max_row_nnz = 0;
+  csr->rowptr[0] = 0;
+  for (int row = 0; row < builder->rows; row++) {
+    const spectre_spin_matrix_builder_row_struct *restrict row_builder = &builder->row_builders[row];
+    int retained = 0;
+    for (int slot = 0; slot < row_builder->capacity; slot++) {
+      if (row_builder->slots[slot].col >= 0) {
+        if (row_builder->slots[slot].col >= builder->cols || !isfinite(row_builder->slots[slot].val)) {
+          free(csr->rowptr);
+          csr->rowptr = NULL;
+          return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+        } // END IF: occupied builder slot is malformed
+        if (row_builder->slots[slot].val != 0.0)
+          retained++;
+      } // END IF: row-local hash slot is occupied
+    } // END LOOP: for slot over one row-local hash table
+    if (retained > INT_MAX - total_nnz) {
+      free(csr->rowptr);
+      csr->rowptr = NULL;
+      return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    } // END IF: CSR nnz exceeds its int index representation
+    total_nnz += retained;
+    csr->rowptr[row + 1] = total_nnz;
+    if (retained > max_row_nnz)
+      max_row_nnz = retained;
+  } // END LOOP: for row over builder rows during CSR counting
 
-  int compressed_nnz = 0;
-  for (int i = 0; i < builder->nnz;) {
-    const int row = builder->entries[i].row;
-    const int col = builder->entries[i].col;
-    REAL val = 0.0;
-    while (i < builder->nnz && builder->entries[i].row == row && builder->entries[i].col == col) {
-      val += builder->entries[i].val;
-      i++;
-    } // END WHILE: accumulate duplicate triplet entries
-    if (!isfinite(val))
-      return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
-    if (val != 0.0) {
-      builder->entries[compressed_nnz].row = row;
-      builder->entries[compressed_nnz].col = col;
-      builder->entries[compressed_nnz].val = val;
-      compressed_nnz++;
-    } // END IF: compressed triplet entry is nonzero
-  } // END LOOP: for i over sorted triplet entries
+  if (total_nnz > 0) {
+    if ((size_t)total_nnz > SIZE_MAX / sizeof(int) || (size_t)total_nnz > SIZE_MAX / sizeof(REAL)) {
+      free(csr->rowptr);
+      csr->rowptr = NULL;
+      return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    } // END IF: final CSR array byte size is unrepresentable
+    csr->colind = (int *)malloc((size_t)total_nnz * sizeof(int));
+    csr->vals = (REAL *)malloc((size_t)total_nnz * sizeof(REAL));
+    if (csr->colind == NULL || csr->vals == NULL) {
+      free(csr->rowptr);
+      free(csr->colind);
+      free(csr->vals);
+      csr->rowptr = NULL;
+      csr->colind = NULL;
+      csr->vals = NULL;
+      return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    } // END IF: final CSR value/index allocation failed
+  } // END IF: finalized matrix has retained entries
 
-  csr->rowptr = (int *)calloc((size_t)csr->rows + 1, sizeof(int));
-  csr->colind = (int *)malloc((size_t)compressed_nnz * sizeof(int));
-  csr->vals = (REAL *)malloc((size_t)compressed_nnz * sizeof(REAL));
-  if (csr->rowptr == NULL || csr->colind == NULL || csr->vals == NULL) {
+  spectre_spin_row_entry_struct *restrict scratch = NULL;
+  if (max_row_nnz > 0) {
+    if ((size_t)max_row_nnz > SIZE_MAX / sizeof(spectre_spin_row_entry_struct)) {
+      free(csr->rowptr);
+      free(csr->colind);
+      free(csr->vals);
+      csr->rowptr = NULL;
+      csr->colind = NULL;
+      csr->vals = NULL;
+      return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    } // END IF: row-sort scratch byte size is unrepresentable
+    scratch = (spectre_spin_row_entry_struct *)malloc((size_t)max_row_nnz * sizeof(spectre_spin_row_entry_struct));
+    if (scratch == NULL) {
+      free(csr->rowptr);
+      free(csr->colind);
+      free(csr->vals);
+      csr->rowptr = NULL;
+      csr->colind = NULL;
+      csr->vals = NULL;
+      return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
+    } // END IF: row-sort scratch allocation failed
+  } // END IF: at least one row needs sorting scratch
+
+  int status = BHAHAHA_SUCCESS;
+  for (int row = 0; row < builder->rows; row++) {
+    const spectre_spin_matrix_builder_row_struct *restrict row_builder = &builder->row_builders[row];
+    int row_nnz = 0;
+    for (int slot = 0; slot < row_builder->capacity; slot++) {
+      if (row_builder->slots[slot].col >= 0 && row_builder->slots[slot].val != 0.0)
+        scratch[row_nnz++] = row_builder->slots[slot];
+    } // END LOOP: for slot over occupied nonzero entries in one builder row
+    if (row_nnz > 1)
+      qsort(scratch, (size_t)row_nnz, sizeof(spectre_spin_row_entry_struct), spectre_spin_matrix_entry_cmp);
+    if (row_nnz != csr->rowptr[row + 1] - csr->rowptr[row]) {
+      status = DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+      break;
+    } // END IF: collected row count disagrees with the counting pass
+    for (int entry = 0; entry < row_nnz; entry++) {
+      if ((entry > 0 && scratch[entry - 1].col >= scratch[entry].col) ||
+          scratch[entry].col < 0 || scratch[entry].col >= builder->cols || !isfinite(scratch[entry].val)) {
+        status = DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
+        break;
+      } // END IF: sorted builder row is not finite, valid, and unique
+      const int dst = csr->rowptr[row] + entry;
+      csr->colind[dst] = scratch[entry].col;
+      csr->vals[dst] = scratch[entry].val;
+    } // END LOOP: for entry over one sorted CSR row
+    if (status != BHAHAHA_SUCCESS)
+      break;
+  } // END LOOP: for row over builder rows during CSR population
+  free(scratch);
+  if (status != BHAHAHA_SUCCESS) {
     free(csr->rowptr);
     free(csr->colind);
     free(csr->vals);
     csr->rowptr = NULL;
     csr->colind = NULL;
     csr->vals = NULL;
-    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
-  } // END IF: CSR array allocation failed
-
-  for (int i = 0; i < compressed_nnz; i++)
-    csr->rowptr[builder->entries[i].row + 1]++;
-  for (int row = 0; row < csr->rows; row++)
-    csr->rowptr[row + 1] += csr->rowptr[row];
-  int *restrict cursor = (int *)malloc((size_t)csr->rows * sizeof(int));
-  if (cursor == NULL) {
-    free(csr->rowptr);
-    free(csr->colind);
-    free(csr->vals);
-    csr->rowptr = NULL;
-    csr->colind = NULL;
-    csr->vals = NULL;
-    return DIAG_SPECTRE_SPIN_POTENTIAL_MALLOC_ERROR;
-  } // END IF: CSR row cursor allocation failed
-  for (int row = 0; row < csr->rows; row++)
-    cursor[row] = csr->rowptr[row];
-  for (int i = 0; i < compressed_nnz; i++) {
-    const int row = builder->entries[i].row;
-    const int dst = cursor[row]++;
-    csr->colind[dst] = builder->entries[i].col;
-    csr->vals[dst] = builder->entries[i].val;
-  } // END LOOP: for i over compressed triplet entries
-  free(cursor);
-  csr->nnz = compressed_nnz;
+    return status;
+  } // END IF: direct row-wise CSR population failed
+  csr->nnz = total_nnz;
   return BHAHAHA_SUCCESS;
 } // END FUNCTION: spectre_spin_builder_to_csr
 
@@ -1342,15 +1473,15 @@ static REAL spectre_spin_metric_deriv(const REAL *restrict gfs, const int gf, co
 } // END FUNCTION: spectre_spin_metric_deriv
 
 /**
- * Add a scaled sparse outer product to a triplet matrix builder.
+ * Add a scaled sparse outer product to a coalescing matrix builder.
  *
- * @param[in,out] builder Triplet builder receiving the outer product.
+ * @param[in,out] builder Matrix builder receiving the outer product.
  * @param[in] a Left sparse row.
  * @param[in] b Right sparse row.
  * @param factor Scalar multiplier.
- * @return BHAHAHA_SUCCESS, or an error code from triplet assembly.
+ * @return BHAHAHA_SUCCESS, or an error code from sparse assembly.
  */
-static int spectre_spin_add_outer(spectre_spin_triplet_builder_struct *restrict builder, const spectre_spin_sparse_row_struct *restrict a,
+static int spectre_spin_add_outer(spectre_spin_matrix_builder_struct *restrict builder, const spectre_spin_sparse_row_struct *restrict a,
                                   const spectre_spin_sparse_row_struct *restrict b, const REAL factor) {
   if (factor == 0.0)
     return BHAHAHA_SUCCESS;
@@ -1766,15 +1897,14 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     return DIAG_SPECTRE_SPIN_POTENTIAL_GEOMETRY_ERROR;
   } // END IF: reduced-space map has the wrong size
 
-  spectre_spin_triplet_builder_struct K_builder;
-  spectre_spin_triplet_builder_struct M_builder;
-  const int initial_capacity = N * 512;
-  int status = spectre_spin_builder_init(&K_builder, N, N, initial_capacity);
+  spectre_spin_matrix_builder_struct K_builder = {0};
+  spectre_spin_matrix_builder_struct M_builder = {0};
+  int status = spectre_spin_builder_init(&K_builder, N, N);
   if (status == BHAHAHA_SUCCESS)
-    status = spectre_spin_builder_init(&M_builder, N, N, initial_capacity);
+    status = spectre_spin_builder_init(&M_builder, N, N);
   if (status != BHAHAHA_SUCCESS) {
-    if (K_builder.entries != NULL)
-      spectre_spin_builder_free(&K_builder);
+    spectre_spin_builder_free(&K_builder);
+    spectre_spin_builder_free(&M_builder);
     free(mu);
     free(nyq);
     free(qUU00);
@@ -2017,9 +2147,9 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
 
   spectre_spin_csr_matrix_struct K_csr = {0}, M_csr = {0};
   status = spectre_spin_builder_to_csr(&K_builder, &K_csr);
+  spectre_spin_builder_free(&K_builder);
   if (status == BHAHAHA_SUCCESS)
     status = spectre_spin_builder_to_csr(&M_builder, &M_csr);
-  spectre_spin_builder_free(&K_builder);
   spectre_spin_builder_free(&M_builder);
   if (status == BHAHAHA_SUCCESS)
     status = spectre_spin_csr_symmetrize(&K_csr);
