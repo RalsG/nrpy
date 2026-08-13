@@ -580,7 +580,6 @@ typedef struct {
   const REAL *restrict mu;
   const REAL *restrict nyq;
   const int *restrict red_to_full;
-  const int *restrict full_to_red;
   int nfull;
   int nred;
   int anchor_plus;
@@ -1726,7 +1725,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   REAL *restrict qUU11 = (REAL *)malloc((size_t)N * sizeof(REAL));
   REAL *restrict x_ref = (REAL *)malloc((size_t)3 * (size_t)N * sizeof(REAL));
   int *restrict red_to_full = (int *)malloc((size_t)Nred * sizeof(int));
-  int *restrict full_to_red = (int *)malloc((size_t)N * sizeof(int));
   double *restrict evals = (double *)malloc(3 * sizeof(double));
   double *restrict evecs_red = (double *)malloc((size_t)Nred * 3 * sizeof(double));
   double *restrict resnorms = (double *)malloc(3 * sizeof(double));
@@ -1734,8 +1732,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   REAL *restrict modes = (REAL *)malloc((size_t)3 * (size_t)N * sizeof(REAL));
   REAL *restrict aligned_modes = (REAL *)malloc((size_t)3 * (size_t)N * sizeof(REAL));
   if (mu == NULL || nyq == NULL || qUU00 == NULL || qUU01 == NULL || qUU11 == NULL || x_ref == NULL || red_to_full == NULL ||
-      full_to_red == NULL || evals == NULL || evecs_red == NULL || resnorms == NULL || evecs_full == NULL || modes == NULL ||
-      aligned_modes == NULL) {
+      evals == NULL || evecs_red == NULL || resnorms == NULL || evecs_full == NULL || modes == NULL || aligned_modes == NULL) {
     free(mu);
     free(nyq);
     free(qUU00);
@@ -1743,7 +1740,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -1789,7 +1785,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
         free(qUU11);
         free(x_ref);
         free(red_to_full);
-        free(full_to_red);
         free(evals);
         free(evecs_red);
         free(resnorms);
@@ -1812,7 +1807,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
         free(qUU11);
         free(x_ref);
         free(red_to_full);
-        free(full_to_red);
         free(evals);
         free(evecs_red);
         free(resnorms);
@@ -1851,7 +1845,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -1872,9 +1865,7 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
 
   int reduced_count = 0;
   for (int p = 0; p < N; p++) {
-    full_to_red[p] = -1;
     if (p != anchor_plus && p != anchor_minus) {
-      full_to_red[p] = reduced_count;
       red_to_full[reduced_count] = p;
       reduced_count++;
     } // END IF: full-space point is not a constraint anchor
@@ -1887,7 +1878,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -1912,7 +1902,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -2135,7 +2124,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -2167,7 +2155,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -2191,7 +2178,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -2207,7 +2193,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       .mu = mu,
       .nyq = nyq,
       .red_to_full = red_to_full,
-      .full_to_red = full_to_red,
       .nfull = N,
       .nred = Nred,
       .anchor_plus = anchor_plus,
@@ -2300,7 +2285,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
     free(qUU11);
     free(x_ref);
     free(red_to_full);
-    free(full_to_red);
     free(evals);
     free(evecs_red);
     free(resnorms);
@@ -2324,7 +2308,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
       free(qUU11);
       free(x_ref);
       free(red_to_full);
-      free(full_to_red);
       free(evals);
       free(evecs_red);
       free(resnorms);
@@ -2525,7 +2508,6 @@ static int bah_compute_spectre_spin_potentials(commondata_struct *restrict commo
   free(qUU11);
   free(x_ref);
   free(red_to_full);
-  free(full_to_red);
   free(evals);
   free(evecs_red);
   free(resnorms);
